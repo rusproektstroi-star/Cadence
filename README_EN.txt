@@ -86,26 +86,26 @@ The orchestrator (`vmfleet.ps1`) introduces itself and, per its own canon, shows
 status as the first action of a session — which machines are up, how much RAM they use, ready
 connection commands:
 
-![Orchestrator — self-introduction and fleet status](docs/images/orchestrator-status.png)
+![Orchestrator — self-introduction and fleet status](docs/images/orchestrator-status.jpg)
 
 Cross-role routing — the bureau pane recognizes a question isn't its area and forwards it to the
 engineer over `tmux`; the answer is shown in the same pane:
 
-![Cross-role routing between agent panes](docs/images/cross-role-demo.png)
+![Cross-role routing between agent panes](docs/images/cross-role-demo.jpg)
 
 `devpanel` — a manual panel for a project's several dev servers, address shown as a single
 `IP:port` string ready to paste into a browser:
 
-![devpanel — dev server table](docs/images/devpanel-table.png)
+![devpanel — dev server table](docs/images/devpanel-table.jpg)
 
 `mc` (Midnight Commander) — a file manager in its own tab, for quickly browsing the project tree
 without leaving the main work:
 
-![mc — file manager](docs/images/mc-file-browser.png)
+![mc — file manager](docs/images/mc-file-browser.jpg)
 
 `gh` — GitHub CLI, already installed on the image and ready to use:
 
-![gh — GitHub CLI](docs/images/gh-cli.png)
+![gh — GitHub CLI](docs/images/gh-cli.jpg)
 
 ## License
 
