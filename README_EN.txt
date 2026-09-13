@@ -5,6 +5,10 @@ that host and run AI agents (Claude Code) as full-fledged CLI developers: each p
 own VM, spun up in minutes instead of hours of manual setup, with role separation, resource
 management, and access control built in.
 
+**What this runs on** (the stack, upfront — not a footnote): host is Windows + VMware Workstation
++ PowerShell 7 (run inside Windows Terminal, not a bare console — see `docs/OPERATIONS.md` §2);
+guests are headless Ubuntu Server, no GUI.
+
 ## Why this exists
 
 When you need several independent AI agents on separate machines — one VM per project — you
@@ -147,6 +151,7 @@ golden-image/            — files to build the image (devctl/devpanel/start-age
 docs/GOLDEN_IMAGE.md     — step-by-step image build recipe
 docs/OPERATIONS.md       — operations runbook (day-to-day commands)
 docs/ACCEPTANCE.md       — system verification log
+docs/decisions/          — write-ups of findings ("what broke and why"), not just a code comment
 docs/images/             — demo screenshots
 tests/                   — pure-logic tests (PowerShell/Pester + bash), see tests/README.md
 ```

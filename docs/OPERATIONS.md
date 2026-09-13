@@ -69,7 +69,8 @@ ssh <id> "tmux list-panes -t agents -F '#{pane_index} #{pane_current_command}'"
 (`#requires -Version 7.0`) и откажется стартовать под 5.1 с понятной ошибкой. В новой вкладке
 Windows Terminal по умолчанию может открываться `powershell.exe` (профиль "Windows PowerShell"), не
 `pwsh` — проверить профиль по умолчанию (Settings → Startup) или запускать явно через профиль
-"PowerShell" (7.x).
+"PowerShell" (7.x). Что именно ломается под 5.1/легаси-оболочками (кириллица в `?????`, ANSI-коды
+как текст) и почему — `docs/decisions/orchestrator.md`.
 
 **Перед первым запуском** — открыть `vmfleet.ps1`, отредактировать блок «КОНФИГ» под свой хост:
 SSH-пользователь гостевых машин, путь к диску с `.vmx`, подсеть VMware (см. VMware Virtual Network
