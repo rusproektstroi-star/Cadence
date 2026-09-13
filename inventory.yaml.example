@@ -1,0 +1,61 @@
+# Реестр парка VM. Скопировать в inventory.yaml (уже в .gitignore — свои реальные адреса/
+# репозитории туда не коммитятся) и отредактировать под свой хост.
+#
+# `vmfleet validate` проверяет: уникальность id/hostname/config_dir по всему парку; путь .vmx
+# лежит внутри $VmxRoot (см. конфиг vmfleet.ps1); суммарный memsize — справочно, реальный бюджет
+# считается по факту свободной ОЗУ хоста при `up`.
+
+vms:
+  - id: cli-golden
+    profile: headless
+    role: golden-template          # не поднимается как проектная машина, шаблон для vmfleet clone
+    vmx: E:\Virtual Machines\cli-golden\cli-golden.vmx
+    hostname: cli-golden
+    memsize: 2048                  # см. docs/GOLDEN_IMAGE.md — замерить под свою нагрузку
+    numvcpus: 2
+    agents:
+      - name: engineer
+        role: engineer
+        workdir: /home/YOUR_VM_USER/workspace/project
+        config_dir: /home/YOUR_VM_USER/.config/claude-cli-golden-engineer
+      - name: bureau
+        role: bureau
+        workdir: /home/YOUR_VM_USER/workspace/project
+        config_dir: /home/YOUR_VM_USER/.config/claude-cli-golden-bureau
+    network:
+      ip: null                      # golden-шаблон, статический IP не назначается
+      hostname: null
+      ports: []
+    github:
+      repo: null                    # golden-шаблон, проект не назначен
+    host:
+      browser_profile: null
+      mount_letter: null
+
+  # Пример проектной машины, полученной через `vmfleet clone <id> -Repo <url>` — эту запись
+  # `clone` не создаёт сама (см. docs/OPERATIONS.md §2), дописать вручную по итогам отчёта команды.
+  - id: my-project-vm
+    profile: headless
+    role: project
+    vmx: E:\Virtual Machines\my-project-vm\my-project-vm.vmx
+    hostname: my-project-vm
+    memsize: 2048
+    numvcpus: 2
+    agents:
+      - name: engineer
+        role: engineer
+        workdir: /home/YOUR_VM_USER/workspace/project
+        config_dir: /home/YOUR_VM_USER/.config/claude-my-project-vm-engineer
+      - name: bureau
+        role: bureau
+        workdir: /home/YOUR_VM_USER/workspace/project
+        config_dir: /home/YOUR_VM_USER/.config/claude-my-project-vm-bureau
+    network:
+      ip: 192.168.100.10             # из диапазона $StaticIpBase в vmfleet.ps1, вне DHCP-пула
+      hostname: my-project-vm.test
+      ports: [3000, 8000]
+    github:
+      repo: git@github.com:your-org/your-project.git
+    host:
+      browser_profile: "Profile 1"
+      mount_letter: null

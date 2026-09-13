@@ -1,0 +1,10 @@
+[Unit]
+Description=Claude Code agents (tmux session)
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=%h/start-agents.sh
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,6 @@
+[Unit]
+Description=devctl watchdog — idle-stop dev.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/bin/devctl-watchdog

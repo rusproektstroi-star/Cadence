@@ -1,0 +1,58 @@
+#!/bin/bash
+# devctl-watchdog — раз в 30с (systemd-таймер, см. golden-image/systemd/devctl-watchdog.timer).
+set -euo pipefail
+
+STATE_DIR="$HOME/.local/state/devctl"
+HOLDS_DIR="$STATE_DIR/holds"
+EVENTS_LOG="$STATE_DIR/events.log"
+IDLE_COUNTER_FILE="$STATE_DIR/idle_since"
+GRACE_SECONDS="${DEVCTL_GRACE_SECONDS:-600}"   # 10 минут по умолчанию
+PORT="${DEVCTL_PORT:-3000}"
+UNIT="dev.service"
+
+log_event() {
+  echo "$(date -Iseconds) event=$1 initiator=watchdog reason=\"$2\"" >> "$EVENTS_LOG"
+  local proj_log="$HOME/workspace/project/.dev-events.log"
+  echo "$(date -Iseconds) event=$1 initiator=watchdog reason=\"$2\"" >> "$proj_log" 2>/dev/null || true
+}
+
+systemctl --user is-active --quiet "$UNIT" 2>/dev/null || exit 0
+
+established=$(ss -Htn state established "sport = :$PORT" 2>/dev/null | wc -l | tr -d ' ')
+now_holders=0
+for f in "$HOLDS_DIR"/*; do
+  [ -e "$f" ] || continue
+  exp=$(cat "$f" 2>/dev/null || echo 0)
+  [ "$exp" -gt "$(date +%s)" ] && now_holders=$((now_holders + 1))
+done
+
+if [ "$established" -gt 0 ] || [ "$now_holders" -gt 0 ]; then
+  rm -f "$IDLE_COUNTER_FILE"
+  date +%s > "$STATE_DIR/last_active"
+  exit 0
+fi
+
+# Порт не слушает при активном юните — "упал", не простой
+if ! ss -Htln "sport = :$PORT" 2>/dev/null | grep -q .; then
+  fail_since_file="$STATE_DIR/crash_since"
+  if [ ! -f "$fail_since_file" ]; then date +%s > "$fail_since_file"; fi
+  fail_since=$(cat "$fail_since_file")
+  if [ $(( $(date +%s) - fail_since )) -gt 60 ]; then
+    log_event "crashed" "порт не слушает дольше 60с при активном юните — уведомление, без автоперезапуска"
+  fi
+  exit 0
+fi
+rm -f "$STATE_DIR/crash_since"
+
+if [ ! -f "$IDLE_COUNTER_FILE" ]; then
+  date +%s > "$IDLE_COUNTER_FILE"
+  exit 0
+fi
+
+idle_since=$(cat "$IDLE_COUNTER_FILE")
+idle_now=$(( $(date +%s) - idle_since ))
+if [ "$idle_now" -gt "$GRACE_SECONDS" ]; then
+  systemctl --user stop "$UNIT"
+  rm -f "$HOLDS_DIR"/* "$IDLE_COUNTER_FILE"
+  log_event "idle-stop" "простой ${idle_now}с > grace ${GRACE_SECONDS}с"
+fi

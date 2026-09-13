@@ -1,0 +1,130 @@
+#!/bin/bash
+# devctl — единая точка управления dev-сервером гостя (автоматика: аренда/watchdog для ОДНОГО
+# сервера на машину). Через это ходят и оркестратор, и агент — напрямую `npm run dev` в панели
+# tmux запускать нельзя (не попадёт в бюджет ОЗУ хоста и не будет найден watchdog'ом).
+set -euo pipefail
+
+STATE_DIR="$HOME/.local/state/devctl"
+HOLDS_DIR="$STATE_DIR/holds"
+EVENTS_LOG="$STATE_DIR/events.log"
+LAST_ACTIVE_FILE="$STATE_DIR/last_active"
+CONFIG_FILE="$HOME/.devctl.conf"   # PROJECT_START_CMD="...", PORT=3000 — из конфигурации проекта
+UNIT="dev.service"
+
+mkdir -p "$HOLDS_DIR"
+touch "$EVENTS_LOG"
+
+PORT=3000
+if [ -f "$CONFIG_FILE" ]; then
+  # shellcheck disable=SC1090
+  source "$CONFIG_FILE"
+fi
+if [ -z "${PROJECT_START_CMD:-}" ]; then
+  echo "devctl: PROJECT_START_CMD не задан в $CONFIG_FILE — команда запуска берётся из конфигурации проекта, не зашита" >&2
+fi
+
+log_event() {
+  local event="$1" initiator="${2:-$(whoami)}" reason="${3:-}"
+  local line
+  line="$(date -Iseconds) event=$event initiator=$initiator reason=\"$reason\""
+  echo "$line" >> "$EVENTS_LOG"
+  local proj_log="$HOME/workspace/project/.dev-events.log"
+  mkdir -p "$(dirname "$proj_log")" 2>/dev/null || true
+  echo "$line" >> "$proj_log" 2>/dev/null || true
+}
+
+is_running() { systemctl --user is-active --quiet "$UNIT" 2>/dev/null; }
+
+established_count() { ss -Htn state established "sport = :$PORT" 2>/dev/null | wc -l | tr -d ' '; }
+is_listening() { ss -Htln "sport = :$PORT" 2>/dev/null | grep -q .; }
+
+active_holders() {
+  local now; now=$(date +%s)
+  local h=()
+  for f in "$HOLDS_DIR"/*; do
+    [ -e "$f" ] || continue
+    local exp; exp=$(cat "$f" 2>/dev/null || echo 0)
+    if [ "$exp" -gt "$now" ]; then h+=("$(basename "$f")"); else rm -f "$f"; fi
+  done
+  printf '%s\n' "${h[@]}"
+}
+
+cmd_start() {
+  local port="$PORT"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --port) port="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  if is_running; then
+    echo "уже запущен — продление, не ошибка"
+    log_event "start" "" "продление (уже работал)"
+    return 0
+  fi
+  mkdir -p "$HOME/.config/systemd/user"
+  cat > "$HOME/.config/systemd/user/$UNIT" <<EOF
+[Unit]
+Description=Dev server (devctl, порт $port)
+
+[Service]
+WorkingDirectory=%h/workspace/project
+ExecStart=/bin/bash -lc '${PROJECT_START_CMD:-echo "PROJECT_START_CMD не задан"}'
+Restart=no
+
+[Install]
+WantedBy=default.target
+EOF
+  systemctl --user daemon-reload
+  systemctl --user start "$UNIT"
+  date +%s > "$LAST_ACTIVE_FILE"
+  log_event "start" "" "devctl start --port $port"
+  echo "запущен как $UNIT, порт $port"
+}
+
+cmd_stop() {
+  local reason="${1:-devctl stop}"
+  systemctl --user stop "$UNIT" 2>/dev/null || true
+  rm -f "$HOLDS_DIR"/*
+  log_event "stop" "" "$reason"
+}
+
+cmd_status_json() {
+  local running=false listening=false
+  is_running && running=true
+  is_listening && listening=true
+  local est; est=$(established_count)
+  local holders_arr=()
+  while IFS= read -r h; do [ -n "$h" ] && holders_arr+=("\"$h\""); done < <(active_holders)
+  local holders_json; holders_json=$(IFS=,; echo "${holders_arr[*]}")
+  local last; last=$(cat "$LAST_ACTIVE_FILE" 2>/dev/null || echo 0)
+  local now; now=$(date +%s)
+  local idle=$(( now - last ))
+  printf '{"running": %s, "listening": %s, "port": %s, "established": %s, "last_active_ts": %s, "idle_seconds": %s, "holders": [%s]}\n' \
+    "$running" "$listening" "$PORT" "$est" "$last" "$idle" "$holders_json"
+}
+
+cmd_hold() {
+  local who="$1"; shift
+  local ttl=1800
+  while [ $# -gt 0 ]; do case "$1" in --ttl) ttl="$2"; shift 2 ;; *) shift ;; esac; done
+  echo "$(( $(date +%s) + ttl ))" > "$HOLDS_DIR/$who"
+  date +%s > "$LAST_ACTIVE_FILE"
+  log_event "hold" "$who" "ttl=${ttl}s"
+  echo "аренда '$who' до $(date -d "@$(( $(date +%s) + ttl ))" -Iseconds 2>/dev/null || echo "+${ttl}s")"
+}
+
+cmd_release() {
+  local who="$1"
+  rm -f "$HOLDS_DIR/$who"
+  log_event "release" "$who" "manual"
+}
+
+case "${1:-}" in
+  start)   shift; cmd_start "$@" ;;
+  stop)    shift; cmd_stop "$@" ;;
+  status)  cmd_status_json ;;
+  hold)    shift; cmd_hold "$@" ;;
+  release) shift; cmd_release "$@" ;;
+  *) echo "usage: devctl {start [--port N]|stop|status|hold <who> [--ttl N]|release <who>}" >&2; exit 1 ;;
+esac

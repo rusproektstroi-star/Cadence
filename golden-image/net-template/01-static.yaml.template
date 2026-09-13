@@ -1,0 +1,11 @@
+network:
+  version: 2
+  ethernets:
+    __INTERFACE__:
+      dhcp4: false
+      addresses: [__STATIC_IP__/24]
+      routes:
+        - to: default
+          via: __GATEWAY__
+      nameservers:
+        addresses: [__GATEWAY__, 1.1.1.1]
