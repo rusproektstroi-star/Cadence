@@ -142,6 +142,7 @@ docs/GOLDEN_IMAGE.md     — пошаговый рецепт сборки обр
 docs/OPERATIONS.md       — операционный runbook (рабочие команды)
 docs/ACCEPTANCE.md       — журнал проверки системы
 docs/images/             — скриншоты демонстрации
+tests/                   — тесты чистой логики (PowerShell/Pester + bash), см. tests/README.md
 ```
 
 ## Статус
