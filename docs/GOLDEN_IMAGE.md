@@ -127,6 +127,18 @@ cp golden-image/net-template/01-static.yaml.template ~/net-template/
 см. `docs/OPERATIONS.md` §3) при разводке под конкретный проект — не на golden-образе: адрес
 гостя известен только после клонирования.
 
+**Известная ловушка — устаревший конфиг установщика конфликтует с новым статическим.** Ubuntu
+Server (subiquity-инсталлятор) сам создаёт `/etc/netplan/00-installer-config.yaml` с DHCP и
+`match: macaddress: <MAC на момент установки>`. Этот файл клонируется байт-в-байт на каждый клон
+golden-образа, но настоящий MAC у клона уже другой (обезличен оркестратором) — `netplan apply`
+падает с `Cannot find unique matching interface for <iface>`, потому что не может сопоставить
+старый MAC ни одному реальному интерфейсу. Отключить один раз **на самом golden-образе**, чтобы
+не чинить это на каждом клоне заново:
+
+```bash
+sudo mv /etc/netplan/00-installer-config.yaml /etc/netplan/00-installer-config.yaml.disabled
+```
+
 ## 9. Обезличивание перед снапшотом
 
 ```bash

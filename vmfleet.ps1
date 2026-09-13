@@ -414,7 +414,7 @@ function Invoke-Health {
         # Одна строка через ";", не here-string — файл может оказаться в CRLF после git
         # checkout/reset на Windows, тогда построчный \r ломает вывод на госте.
         $script = 'echo "node:  $(node -v 2>/dev/null || echo НЕТ)"; ' +
-            'echo "claude: $(claude --version 2>/dev/null || echo НЕТ)"; ' +
+            'echo "claude: $($HOME/.npm-global/bin/claude --version 2>/dev/null || claude --version 2>/dev/null || echo НЕТ)"; ' +
             'echo "gh:    $(gh --version 2>/dev/null | head -1 || echo НЕТ)"; ' +
             'echo "git:   $(git --version 2>/dev/null || echo НЕТ)"; ' +
             'echo "panes: $(tmux list-panes -t agents 2>/dev/null | wc -l)"; ' +
