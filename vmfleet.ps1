@@ -440,6 +440,12 @@ function Invoke-SshConfig {
         $block.Add("    HostName $($vm.network.ip)")
         $block.Add("    User $SshUser")
         $block.Add("    IdentityFile $SshOwnerKey")
+        # StrictHostKeyChecking accept-new — та же настройка, что уже стоит в $SshBaseOpts для
+        # внутренних вызовов самого оркестратора. Без неё пользовательский ssh-config спотыкается
+        # о смену host-ключа каждый раз, когда IP переиспользуется другой машиной (DHCP/повторный
+        # clone) — оркестратор этой проблемы не имел, а сгенерированный для человека конфиг имел,
+        # потому что настройка не была перенесена сюда.
+        $block.Add("    StrictHostKeyChecking accept-new")
         $block.Add("")
     }
     $block.Add($end)
