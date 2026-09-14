@@ -130,7 +130,7 @@ function Get-LocalRepoPath {
     param([string]$RepoUrl)
     # git@github.com:org/Name.git или https://github.com/org/Name.git -> "Name"
     $name = ($RepoUrl -split '[/:]')[-1] -replace '\.git$', ''
-    return Join-Path "$env:USERPROFILE\Documents" $name
+    return Join-Path "$env:USERPROFILE\Documents\GitHub" $name
 }
 
 function Get-NextFreeBrowserProfile {
