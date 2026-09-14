@@ -1,5 +1,16 @@
 # Cadence
 
+> **Cadence: Forget heavy IDEs. Feel the unmatched speed and satisfaction of next-level AI agent
+> execution.**
+>
+> Please forgive the Russian in the repo. If I can read English — you can learn Russian — I'm
+> just way too lazy to change something that works perfectly for me personally. Besides, the AI
+> agents that will deploy this beauty on your local machine don't care what language the repo is
+> written in anyway.
+>
+> I think the pure satisfaction I get every time I sit down at my computer to start or continue a
+> project completely wipes out any sense of pride in having created it.
+
 **Cadence** is a two-tier golden-image system and orchestrator for a fleet of virtual machines
 that host and run AI agents (Claude Code) as full-fledged CLI developers: each project gets its
 own VM, spun up in minutes instead of hours of manual setup, with role separation, resource
