@@ -118,7 +118,10 @@ Workstation сам назначает его при настройке вирт�
 
 Cadence распространяется под **SESL (Shared Effort Software License)**, конфигурация с весовым
 консенсусом при нескольких участниках и индивидуальным авторством по вкладам — полный текст в
-[`LICENSE.html`](LICENSE.html) (сертификат с проверяемым License ID `282-20260913-d0fb6ee2-c5b7-4763-aa7e-e5e5f931edf2`)
+[`LICENSE.html`](LICENSE.html) (сертификат с проверяемым License ID `282-20260913-d0fb6ee2-c5b7-4763-aa7e-e5e5f931edf2`;
+GitHub всегда показывает `.html`-файлы как исходник при просмотре в репозитории — **[открыть
+отрендеренным через htmlpreview](https://htmlpreview.github.io/?https://github.com/rusproektstroi-star/Cadence/blob/main/LICENSE.html)**,
+либо скачать файл и открыть локально в браузере)
 и кратко ниже. Сгенерирована конфигуратором SESL — статистика и сама генерация конфигураций:
 **[sesl.cvet.global/stats](https://sesl.cvet.global/stats)**.
 
