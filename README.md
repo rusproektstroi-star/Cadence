@@ -118,11 +118,10 @@ Workstation сам назначает его при настройке вирт�
 
 Cadence распространяется под **SESL (Shared Effort Software License)**, конфигурация с весовым
 консенсусом при нескольких участниках и индивидуальным авторством по вкладам — полный текст в
-[`LICENSE`](LICENSE) (простой текст, GitHub показывает его во вкладке **License** репозитория) и
-кратко ниже. Проверяемый сертификат с License ID `282-20260913-d0fb6ee2-c5b7-4763-aa7e-e5e5f931edf2`
-— [`LICENSE-certificate.pdf`](LICENSE-certificate.pdf) (открывается прямо в GitHub) или исходный
-стилизованный [`LICENSE-certificate.html`](LICENSE-certificate.html). Сгенерирована конфигуратором
-SESL — статистика и сама генерация конфигураций: **[sesl.cvet.global/stats](https://sesl.cvet.global/stats)**.
+[`LICENSE`](LICENSE) и кратко ниже. Оформленный сертификат с проверяемым License ID
+`282-20260913-d0fb6ee2-c5b7-4763-aa7e-e5e5f931edf2` лежит в корне репозитория —
+`LICENSE-certificate.pdf`/`.html`. Сгенерирована конфигуратором SESL — статистика и сама генерация
+конфигураций: **[sesl.cvet.global/stats](https://sesl.cvet.global/stats)**.
 
 **Это не open source в классическом смысле — но выполняет ту же защитную функцию для интересов
 участников.** Продукт сделан для себя, поэтому он удобный: решения по проекту принимаются
