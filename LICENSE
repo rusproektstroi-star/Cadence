@@ -1,0 +1,183 @@
+SESL — Shared Effort Software License
+Configuration No. 282 (DM:SP WC · CM:CA SC · IPM:DP · IPP:IO)
+
+License ID:      282-20260913-d0fb6ee2-c5b7-4763-aa7e-e5e5f931edf2
+Program:         Cadence
+Initiator:       Valiel Sibiontov
+Agreement date:  2026-09-13
+Issued:          2026-09-13
+
+Full certificate (styled, verifiable): LICENSE-certificate.html
+Configurator / stats: https://sesl.cvet.global/stats
+
+Selected modules
+-----------------
+Decision Making (DM): Subsequent Phase (SP) -> Weighted Consensus (WC)
+Commercialization (CM): Commercialization Allowed (CA) -> SESL Commerce (SC)
+Intellectual Property Management (IPM): Delegated Decision to Participants
+  (From the Start) (DP)
+Intellectual Property Protection (IPP): Individual Ownership
+  (Contribution-Based Copyright) (IO)
+
+
+Shared Effort Software License (SESL) - Basic License
+Version 0.3, July 2025
+
+Preamble
+--------
+This Basic License sets forth the fundamental terms and conditions governing
+the collaborative development and non-commercial use of software within the
+Shared Effort Software initiative. This license promotes collaboration, fair
+contribution, and shared ownership among participants, without the primary
+aim of commercial profit. It serves as the foundation upon which specific
+project terms are built using optional Modules. Commercial use of the
+Program is governed by the selected "Commercialization" Module.
+
+1. Definitions
+---------------
+Program: The software developed under this License Configuration, including
+  source code, documentation, and related materials.
+Participant: An individual or entity that contributes to the Program and has
+  their Contribution accepted according to the terms of this License
+  Configuration.
+Contribution: Any original work of authorship contributed to the Program,
+  including but not limited to source code, documentation, bug fixes,
+  testing, design, and other creative input.
+Project Initiator: The Participant who initiated the project and created the
+  initial License Configuration.
+License Configuration: The combination of this Basic License and selected
+  Modules, defining the specific terms governing a particular project.
+
+2. Grant of Rights (Non-Commercial Use)
+-----------------------------------------
+Subject to the terms and conditions of this License Configuration, each
+Participant is granted a non-exclusive, worldwide, royalty-free license to:
+  - Use, modify, and distribute the Program for non-commercial purposes.
+  - Create derivative works of the Program for non-commercial purposes.
+  - Contribute to the Program by submitting Contributions.
+
+Commercial use of the Program is governed by the selected "Commercialization"
+Module.
+
+3. Contribution License
+-------------------------
+Each Participant, by submitting a Contribution, grants to all other
+Participants a non-exclusive, worldwide, royalty-free license to use,
+modify, and distribute that Contribution as part of the Program under the
+terms of this License Configuration.
+
+4. No Warranty
+----------------
+THE PROGRAM IS PROVIDED "AS IS," WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE PROGRAM OR THE USE OR OTHER DEALINGS
+IN THE PROGRAM.
+
+5. Limitation of Liability
+-----------------------------
+IN NO EVENT UNLESS REQUIRED BY APPLICABLE LAW OR AGREED TO IN WRITING WILL
+ANY COPYRIGHT HOLDER, OR ANY OTHER PARTY WHO MODIFIES AND/OR CONVEYS THE
+PROGRAM AS PERMITTED BY THE TERMS OF THIS LICENSE, BE LIABLE TO YOU FOR
+DAMAGES, INCLUDING ANY GENERAL, SPECIAL, INCIDENTAL OR CONSEQUENTIAL DAMAGES
+ARISING OUT OF THE USE OR INABILITY TO USE THE PROGRAM (INCLUDING BUT NOT
+LIMITED TO LOSS OF DATA OR DATA BEING RENDERED INACCURATE OR LOSSES
+SUSTAINED BY YOU OR THIRD PARTIES OR A FAILURE OF THE PROGRAM TO OPERATE
+WITH ANY OTHER PROGRAMS), EVEN IF SUCH HOLDER OR OTHER PARTY HAS BEEN
+ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+
+6. Governing Law
+-------------------
+This License will be governed by and construed in accordance with the laws
+of Republic of Cyprus.
+
+7. Termination
+-----------------
+This License and the rights granted hereunder will terminate automatically
+upon any breach by You of its terms. Sections 4, 5, 6, and 7 will survive
+any termination of this License.
+
+
+Module: Decision Making (DM)
+==============================
+Description: This Module defines the process for making decisions regarding
+the project, including acceptance of Contributions, allocation of
+Contribution Shares, and other project-related matters. It also defines the
+"Decision-Making Body."
+
+Subsequent Phase (SP) -> Weighted Consensus (WC):
+Decisions require the agreement of Participants whose combined Contribution
+Shares represent a majority (more than 50%) of the total Contribution
+Shares. This means that a Participant with a larger Contribution Share has
+a greater influence on achieving consensus. If the required consensus is
+not reached after a reasonable period of discussion (to be determined by
+the Participants), the issue may be resolved by Majority Voting (MV), if
+all Participants agree to switch to this voting method for the specific
+issue at hand.
+
+Interaction with Basic License: This Module replaces the generic provisions
+regarding "Acceptance of Contributions and Participants" and "Contribution
+Accounting and Share Allocation" in the Basic License. It also defines the
+"Decision-Making Body."
+
+
+Module: Commercialization (CM)
+================================
+Description: This Module defines the terms for commercial use of the
+Program and the distribution of resulting revenues, if applicable.
+
+Commercialization Allowed (CA) -> SESL Commerce (SC):
+The Program is released under a specific commercial license derived from
+SESL, the terms of which are defined in a separate document ("SESL Commerce
+License").
+
+Interaction with Basic License: This Module adds conditions to the "Grant
+of Rights" section of the Basic License, specifically regarding commercial
+use. It also defines how "Net Revenues" are calculated.
+
+
+Module: Intellectual Property Management (IPM)
+=================================================
+Description: This Module defines the process for making decisions regarding
+intellectual property rights related to the Program. It determines who has
+the authority to choose or modify the specific IPP options defined in the
+"Intellectual Property Protection" Module and how those decisions are made.
+
+Delegated Decision to Participants (From the Start) (DP):
+The Initiator delegates the decision on the IPP option(s) to the
+Participants from the very beginning. The Participants will then choose one
+of the options (A, B, C, or D) using the decision-making mechanism defined
+in the "Decision Making" Module.
+
+Interaction with Basic License: This Module determines who makes decisions
+related to intellectual property rights, while the "Intellectual Property
+Protection" Module defines what those options are. It supplements the
+"Grant of Rights" section of the Basic License by specifying who has the
+authority to grant specific rights related to intellectual property.
+Transition to IPP Module: After the IPM Module determines who has the
+authority to make decisions related to IP, the chosen IPP option(s) from the
+"Intellectual Property Protection" Module then comes into effect.
+
+
+Module: Intellectual Property Protection (IPP)
+=================================================
+Description: This Module defines the ownership and management of
+intellectual property rights related to the Program.
+
+Individual Ownership (Contribution-Based Copyright) (IO):
+Each Participant retains the copyright to their own Contributions. Use,
+modification, or distribution of a specific Contribution requires the
+consent of the Participant who made that Contribution. The combination of
+Contributions to create the Program as a whole is licensed under the terms
+of the License Configuration.
+
+Interaction with Basic License: This Module clarifies the ownership of
+intellectual property rights related to the Program, supplementing the
+"Grant of Rights" section of the Basic License.
+
+
+--
+Generated by the SESL Configurator. This document is identified by License
+ID 282-20260913-d0fb6ee2-c5b7-4763-aa7e-e5e5f931edf2.
