@@ -1,7 +1,22 @@
 # Cadence
 
-> **Cadence: Forget heavy IDEs. Feel the unmatched speed and satisfaction of next-level AI agent
-> execution.**
+> I designed Cadence for myself — to drive production-grade development on a gaming laptop. The
+> architecture isn't locked to this scale: the same fleet of lightweight virtual machines can be
+> deployed on an enterprise Windows or Linux server. Doing so requires an abstraction layer above
+> the hypervisor instead of direct VMware calls, alongside non-interactive agent authentication.
+> Both tasks are clear and open for collaboration.
+>
+> Cadence resolves four fundamental problems that typically force large organizations to maintain
+> platform engineering teams: context isolation, environment reproducibility, workflow parallelism,
+> and manual resource management. It tackles them not through workarounds, but via an inventory
+> file as the single source of truth, profiles instead of branch bloating, and a lease protocol
+> instead of manual approvals. All of this runs on a single 16 GB laptop — hardware never
+> originally intended for multi-agent execution.
+>
+> The boundary the project is crossing right now is the shift from "it works on my machine" to "it
+> works for anyone who clones the repository." This line is defined by documentation, not code. The
+> repository accepts fixes daily; every bug uncovered during installation is resolved in `main` on
+> the very same day.
 >
 > Please forgive the Russian in the repo. If I can read English — you can learn Russian — I'm
 > just way too lazy to change something that works perfectly for me personally. Besides, the AI
@@ -156,6 +171,9 @@ in `vmfleet.ps1` for your host → `inventory.yaml.example` → `inventory.yaml`
 vmfleet.ps1              — orchestrator (PowerShell, host)
 inventory.yaml.example   — fleet registry template (the real inventory.yaml is gitignored)
 PROMPT.md                — prompt for a from-scratch deployment by an AI agent
+WhatIsIt.md              — what this is and what problems it solves (English)
+HOW_TO_RUN.md            — how to run it: prerequisites, daily flow, common gotchas
+make-shortcut.ps1        — desktop shortcut: fleet status + agent in one click
 canon/agent-roles/       — CLAUDE.md for the engineer/bureau panes on the image
 canon/TABS_AND_ROLES.md  — role model and physical places of work
 golden-image/            — files to build the image (devctl/devpanel/start-agents.sh/systemd/...)
