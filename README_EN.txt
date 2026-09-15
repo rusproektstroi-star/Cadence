@@ -177,6 +177,7 @@ HOW_TO_RUN.md            — how to run it: prerequisites, daily flow, common go
 make-shortcut.ps1        — desktop shortcut: fleet status + agent in one click
 canon/agent-roles/       — CLAUDE.md for the engineer/bureau panes on the image
 canon/TABS_AND_ROLES.md  — role model and physical places of work
+canon/project-screenshots-block.md — block for a project's CLAUDE.md: the operator file-drop directory
 golden-image/            — files to build the image (devctl/devpanel/start-agents.sh/systemd/...)
 docs/GOLDEN_IMAGE.md     — step-by-step image build recipe
 docs/OPERATIONS.md       — operations runbook (day-to-day commands)

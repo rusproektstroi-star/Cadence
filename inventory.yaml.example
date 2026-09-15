@@ -36,6 +36,7 @@ vms:
   # `clone` не создаёт сама (см. docs/OPERATIONS.md §2), дописать вручную по итогам отчёта команды.
   - id: my-project-vm
     profile: headless
+    project: my-project             # имя проекта — подпись смонтированного диска в проводнике
     role: project
     vmx: E:\Virtual Machines\my-project-vm\my-project-vm.vmx
     hostname: my-project-vm
@@ -56,6 +57,15 @@ vms:
       ports: [3000, 8000]
     github:
       repo: git@github.com:your-org/your-project.git
+      own_repo: true                 # свой репозиторий -> screenshots/ в .gitignore;
+                                     # false (чужой/общий) -> в .git/info/exclude, локально
     host:
       browser_profile: "Profile 1"
-      mount_letter: null
+      # Монтирование рабочего каталога гостя на букву диска хоста (нужны WinFsp + SSHFS-Win).
+      # null в обоих полях = машина не монтируется, остальное работает как раньше.
+      mount_letter: "X"
+      mount_label: "my-project"      # подпись диска — ИМЯ ПРОЕКТА, не id машины: при трёх
+                                     # активных дисках проект опознаётся сразу, номер машины нет
+      remote_path: "workspace/project"   # относительно $HOME гостевого пользователя
+    guest:
+      inbox_dir: "screenshots"       # каталог для файлов от оператора, внутри remote_path

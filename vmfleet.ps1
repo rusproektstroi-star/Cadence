@@ -10,7 +10,7 @@
 
 param(
     [Parameter(Position = 0, Mandatory = $true)]
-    [ValidateSet('validate', 'up', 'down', 'status', 'health', 'ssh-config', 'hosts-file', 'activate', 'deactivate', 'snapshot', 'revert', 'clone', 'check-sync', 'dev-start', 'dev-stop', 'dev-status', 'dev-reap', 'dev-watchdog', 'install-dev-watchdog-task', 'shell-open', 'shell-close', 'agents-md-install')]
+    [ValidateSet('validate', 'up', 'down', 'status', 'health', 'ssh-config', 'hosts-file', 'activate', 'deactivate', 'snapshot', 'revert', 'clone', 'check-sync', 'dev-start', 'dev-stop', 'dev-status', 'dev-reap', 'dev-watchdog', 'install-dev-watchdog-task', 'shell-open', 'shell-close', 'agents-md-install', 'mount', 'unmount', 'mounts')]
     [string]$Command,
 
     [Parameter(Position = 1)]
@@ -72,6 +72,15 @@ $StaticIpBase = "192.168.100."
 $StaticIpRangeStart = 10
 $StaticIpRangeEnd = 99
 $MaxActiveProjects = 2   # сколько проектов держать одновременно "активными" (браузер+dev-сервер)
+
+# Монтирование рабочих каталогов гостей на буквы дисков хоста (SSHFS-Win). Буквы раздаются с конца
+# алфавита: новые физические диски Windows нумерует от начала, так они не наступают на проекты.
+$MountLetterPool = @('X', 'Y', 'Z', 'W', 'V', 'U')
+$MountPrereqPaths = @{
+    'WinFsp'    = "$env:ProgramFiles\WinFsp"
+    'SSHFS-Win' = "$env:ProgramFiles\SSHFS-Win"
+}
+$MountLabelRegRoot = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\MountPoints2'
 
 if (-not (Test-Path $VmrunPath)) {
     throw "vmrun не найден по пути '$VmrunPath' — проверить установку VMware Workstation."
@@ -224,6 +233,72 @@ function Get-FreeHostMemMB {
 }
 
 # ---------------------------------------------------------------------------
+# Монтирование — чистые помощники (без обращения к сети/реестру, покрыты тестами)
+# ---------------------------------------------------------------------------
+function Get-MountUncPath {
+    # \\sshfs\user@host\workspace/project -> в UNC разделитель обратный слэш
+    param([string]$User, [string]$HostName, [string]$RemotePath)
+    $rel = ($RemotePath -replace '/', '\').Trim('\')
+    return "\\sshfs\$User@$HostName\$rel"
+}
+
+function ConvertTo-MountPointKey {
+    # UNC -> имя ключа MountPoints2: \\sshfs\u@h\p  =>  ##sshfs#u@h#p (подпись диска в проводнике)
+    param([string]$UncPath)
+    return ($UncPath -replace '^\\\\', '##') -replace '\\', '#'
+}
+
+function Test-MountEntry {
+    # Возвращает список ошибок записи инвентаря (пустой список = запись корректна). Машины без
+    # mount_letter пропускаются: монтирование необязательно, это не ошибка схемы.
+    param($Vm, [string[]]$UsedLetters = @())
+    $errors = @()
+    $letter = $Vm.host.mount_letter
+    if (-not $letter) { return $errors }
+
+    if ($letter -notmatch '^[A-Za-z]$') {
+        $errors += "$($Vm.id): mount_letter '$letter' — должна быть одна буква A-Z"
+        return $errors
+    }
+    if ($UsedLetters -contains $letter.ToUpper()) {
+        $errors += "$($Vm.id): буква $letter уже занята другой машиной парка"
+    }
+    if (-not $Vm.host.remote_path) {
+        $errors += "$($Vm.id): mount_letter задан, но remote_path пуст — монтировать нечего"
+    } elseif ($Vm.host.remote_path -match '^[A-Za-z]:|^[\\/]') {
+        $errors += "$($Vm.id): remote_path '$($Vm.host.remote_path)' должен быть относительным (от `$HOME гостя)"
+    }
+    if (-not $Vm.host.mount_label) {
+        $errors += "$($Vm.id): mount_label пуст — диск в проводнике будет не отличить от соседнего"
+    }
+    $inbox = $Vm.guest.inbox_dir
+    if ($inbox) {
+        if ($inbox -match '^[A-Za-z]:|^[\\/]' -or $inbox -match '\.\.') {
+            $errors += "$($Vm.id): inbox_dir '$inbox' должен лежать внутри remote_path (относительный, без '..')"
+        }
+    }
+    return $errors
+}
+
+function Get-MountPrereqMissing {
+    # Имена отсутствующих предпосылок хоста. Пустой массив = всё на месте.
+    param([hashtable]$Paths = $MountPrereqPaths)
+    $missing = @()
+    foreach ($name in $Paths.Keys) {
+        if (-not (Test-Path $Paths[$name])) { $missing += $name }
+    }
+    return @($missing | Sort-Object)
+}
+
+function Get-MappedDriveLetters {
+    # Буквы, уже занятые на хосте (любые — физические, сетевые, подставные).
+    return @((Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue).Name |
+        Where-Object { $_ -match '^[A-Za-z]$' } | ForEach-Object { $_.ToUpper() })
+}
+
+
+
+# ---------------------------------------------------------------------------
 # validate — схема инвентаря, уникальность id/hostname/config_dir, сходимость бюджета
 # ---------------------------------------------------------------------------
 function Invoke-Validate {
@@ -251,6 +326,25 @@ function Invoke-Validate {
 
     $totalMem = ($inv.vms | Measure-Object -Property memsize -Sum).Sum
     Write-Log "Суммарный memsize по парку: $totalMem МБ (справочно, бюджет — по факту свободной ОЗУ при up)"
+
+    # Монтирование: буквы уникальны по парку и не заняты на хосте чужим устройством,
+    # remote_path относительный, inbox_dir внутри него.
+    $seenLetters = @()
+    foreach ($vm in $inv.vms) {
+        $errors += Test-MountEntry -Vm $vm -UsedLetters $seenLetters
+        $letter = $vm.host.mount_letter
+        if ($letter -and $letter -match '^[A-Za-z]$') {
+            $up = $letter.ToUpper()
+            $seenLetters += $up
+            $drive = Get-PSDrive -Name $up -PSProvider FileSystem -ErrorAction SilentlyContinue
+            if ($drive) {
+                $ours = Get-MountUncPath -User $SshUser -HostName $vm.hostname -RemotePath $vm.host.remote_path
+                if ($drive.DisplayRoot -ne $ours) {
+                    $errors += "$($vm.id): буква $up занята на хосте ($($drive.DisplayRoot ?? 'локальный диск')), а не нашим монтированием"
+                }
+            }
+        }
+    }
 
     if ($errors.Count -eq 0) {
         Write-Log "validate: OK, $($inv.vms.Count) машин(а) в инвентаре"
@@ -320,6 +414,9 @@ function Invoke-Down {
     $targets = @($inv.vms)
     if ($OnlyId) { $targets = @($targets | Where-Object { $_.id -eq $OnlyId }) }
     foreach ($vm in $targets) {
+        # Размонтировать ДО выключения: выключение ВМ с живым монтированием оставляет зависший
+        # дескриптор, который снимается только перезапуском проводника.
+        if ($vm.host.mount_letter) { Invoke-Unmount -VmId $vm.id }
         Write-Log "down: $($vm.id) — soft stop"
         $r = Invoke-Vmrun stop $vm.vmx soft
         if ($r.Code -ne 0) {
@@ -527,6 +624,222 @@ function Invoke-ShellClose {
 }
 
 # ---------------------------------------------------------------------------
+# mount / unmount / mounts — монтирование рабочих каталогов гостей на буквы дисков хоста.
+# Разбор решения — docs/decisions/mounts.md.
+# ---------------------------------------------------------------------------
+function Assert-MountPrereq {
+    # Внятное сообщение вместо ошибки net use (внятно, а не ошибкой net use).
+    $missing = Get-MountPrereqMissing
+    if ($missing.Count -gt 0) {
+        throw "Не установлено: $($missing -join ', '). SSHFS-монтирование без них не работает. " +
+              "Поставить: WinFsp (github.com/winfsp/winfsp/releases), затем SSHFS-Win " +
+              "(github.com/winfsp/sshfs-win/releases). Оба — инсталляторы с UAC, нужен человек."
+    }
+}
+
+function Set-MountLabel {
+    # Подпись сетевого диска в проводнике — только через реестр: label работает с томами.
+    param([string]$UncPath, [string]$Label)
+    $key = Join-Path $MountLabelRegRoot (ConvertTo-MountPointKey -UncPath $UncPath)
+    if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
+    Set-ItemProperty -Path $key -Name '_LabelFromReg' -Value $Label
+}
+
+function Remove-MountLabel {
+    param([string]$UncPath)
+    $key = Join-Path $MountLabelRegRoot (ConvertTo-MountPointKey -UncPath $UncPath)
+    if (Test-Path $key) { Remove-Item -Path $key -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+function Get-RunningVmxList {
+    # Один вызов vmrun на команду, а не по вызову на машину — иначе лог забивается повторами.
+    $r = Invoke-Vmrun list
+    return ($r.Output -join "`n")
+}
+
+function Test-VmPoweredOn {
+    param($Vm, [string]$RunningList)
+    if (-not $PSBoundParameters.ContainsKey('RunningList')) { $RunningList = Get-RunningVmxList }
+    return ($RunningList -match [regex]::Escape($Vm.vmx))
+}
+
+function Set-GuestInbox {
+    # Готовит каталог обмена на госте : сам каталог, правило игнорирования по
+    # полю инвентаря (не угадывая), и блок про screenshots/ в CLAUDE.md проекта. Идемпотентно.
+    param(
+        [string]$IpOrHost,
+        [string]$RemotePath = 'workspace/project',
+        [string]$InboxDir = 'screenshots',
+        [bool]$OwnRepo = $true
+    )
+    if (-not $InboxDir) { return }
+    $proj = "`$HOME/$($RemotePath.Trim('/'))"
+    $ignoreTarget = if ($OwnRepo) { "$proj/.gitignore" } else { "$proj/.git/info/exclude" }
+
+    # mkdir + .gitkeep + строка игнорирования, если её там ещё нет.
+    $script = @"
+set -e
+mkdir -p '$proj/$InboxDir'
+touch '$proj/$InboxDir/.gitkeep'
+if [ -d '$proj/.git' ]; then
+  mkdir -p "`$(dirname '$ignoreTarget')"
+  touch '$ignoreTarget'
+  grep -qxF '$InboxDir/' '$ignoreTarget' || echo '$InboxDir/' >> '$ignoreTarget'
+  echo "IGNORE=$ignoreTarget"
+else
+  echo "IGNORE=нет .git — правило не применялось"
+fi
+"@
+    $res = ssh @SshBaseOpts "$SshUser@$IpOrHost" $script 2>&1
+    Write-Log "inbox: $IpOrHost — каталог '$InboxDir' готов; $($res -join ' ')"
+
+    # Блок в CLAUDE.md проекта — дописываем, если его там нет. Не коммитим: это чужой репозиторий,
+    # коммит делает инженер проекта (docs/decisions/mounts.md).
+    $blockPath = Join-Path $Root "canon\project-screenshots-block.md"
+    if (Test-Path $blockPath) {
+        $block = (Get-Content $blockPath -Raw) -replace "`r`n", "`n"
+        $marker = '## Каталог screenshots/'
+        $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($block))
+        $appendScript = @"
+if [ -f '$proj/CLAUDE.md' ]; then
+  if grep -qF '$marker' '$proj/CLAUDE.md'; then
+    echo 'CLAUDE_MD=блок уже есть'
+  else
+    printf '\n' >> '$proj/CLAUDE.md'
+    echo '$b64' | base64 -d >> '$proj/CLAUDE.md'
+    echo 'CLAUDE_MD=блок дописан (НЕ закоммичен — коммит за инженером проекта)'
+  fi
+else
+  echo 'CLAUDE_MD=нет CLAUDE.md в проекте — блок не дописан'
+fi
+"@
+        $r2 = ssh @SshBaseOpts "$SshUser@$IpOrHost" $appendScript 2>&1
+        Write-Log "inbox: $IpOrHost — $($r2 -join ' ')"
+    }
+}
+
+function Invoke-Mount {
+    param([string]$VmId)
+    Assert-MountPrereq
+    $inv = Get-Inventory
+    $vm = Get-VmEntry $inv $VmId
+
+    $letter = $vm.host.mount_letter
+    if (-not $letter) { throw "$VmId — mount_letter не задан в inventory.yaml, монтировать некуда" }
+    $entryErrors = Test-MountEntry -Vm $vm
+    if ($entryErrors.Count -gt 0) { throw ($entryErrors -join "; ") }
+
+    # Монтируются только включённые машины : диск на выключенную ВМ подвешивает проводник,
+    # и оператор решит, что сломался хост.
+    if (-not (Test-VmPoweredOn -Vm $vm)) {
+        throw "$VmId выключена — монтировать нельзя (диск на выключенную ВМ вешает проводник). Сначала: .\vmfleet.ps1 up -Only $VmId"
+    }
+    $target = if ($vm.network.hostname) { $vm.network.hostname } else { $vm.network.ip }
+    if (-not $target) { throw "$VmId — ни hostname, ни ip в инвентаре, адрес монтирования не собрать" }
+
+    # Каталог обмена готовится здесь же: машины, склонированные до этой фазы, иначе остались бы без
+    # него, а отдельная команда ради одного mkdir — лишняя сущность. Идемпотентно.
+    $ownRepo = if ($null -ne $vm.github.own_repo) { [bool]$vm.github.own_repo } else { $true }
+    Set-GuestInbox -IpOrHost ($vm.network.ip ?? $target) -RemotePath $vm.host.remote_path `
+                   -InboxDir $vm.guest.inbox_dir -OwnRepo $ownRepo
+
+    $unc = Get-MountUncPath -User $SshUser -HostName $target -RemotePath $vm.host.remote_path
+    $up = $letter.ToUpper()
+
+    $existing = Get-PSDrive -Name $up -PSProvider FileSystem -ErrorAction SilentlyContinue
+    if ($existing -and $existing.DisplayRoot -eq $unc) {
+        Write-Log "mount: $VmId — ${up}: уже смонтирован на $unc, повторно не монтирую"
+        return
+    }
+    if ($existing) { throw "Буква ${up}: занята ($($existing.DisplayRoot)) — освободить или сменить mount_letter в инвентаре" }
+
+    # /persistent:no обязателен : восстановление при входе в Windows произойдёт раньше,
+    # чем поднимется ВМ, и проводник повиснет.
+    Write-Log "mount: $VmId — net use ${up}: $unc /persistent:no"
+    $out = net use "${up}:" $unc /persistent:no 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "Монтирование не удалось: $($out -join ' ')" }
+
+    $label = if ($vm.host.mount_label) { $vm.host.mount_label } else { $vm.project }
+    if ($label) { Set-MountLabel -UncPath $unc -Label $label }
+    Write-Log "mount: $VmId — ${up}: подключён, подпись '$label'"
+    Write-Host "${up}: -> $unc   (подпись в проводнике: $label)"
+}
+
+function Invoke-Unmount {
+    param([string]$VmId)
+    $inv = Get-Inventory
+    $vm = Get-VmEntry $inv $VmId
+    $letter = $vm.host.mount_letter
+    if (-not $letter) { return }
+    $up = $letter.ToUpper()
+
+    $drive = Get-PSDrive -Name $up -PSProvider FileSystem -ErrorAction SilentlyContinue
+    if (-not $drive) {
+        Write-Log "unmount: $VmId — ${up}: не смонтирован, нечего снимать"
+        return
+    }
+    $unc = $drive.DisplayRoot
+    net use "${up}:" /delete /y 2>&1 | Out-Null
+    if ($unc) { Remove-MountLabel -UncPath $unc }
+    Write-Log "unmount: $VmId — ${up}: снят"
+}
+
+function Invoke-Mounts {
+    $inv = Get-Inventory
+    $missing = Get-MountPrereqMissing
+    if ($missing.Count -gt 0) {
+        Write-Host "**Предпосылки не установлены:** $($missing -join ', ') — монтирование недоступно, таблица только справочная."
+        Write-Host ""
+    }
+
+    $rows = @()
+    $knownUnc = @()
+    $running = Get-RunningVmxList
+    foreach ($vm in $inv.vms) {
+        $letter = $vm.host.mount_letter
+        if (-not $letter) { continue }
+        $up = $letter.ToUpper()
+        $target = if ($vm.network.hostname) { $vm.network.hostname } else { $vm.network.ip }
+        $unc = if ($vm.host.remote_path -and $target) { Get-MountUncPath -User $SshUser -HostName $target -RemotePath $vm.host.remote_path } else { $null }
+        if ($unc) { $knownUnc += $unc }
+
+        $drive = Get-PSDrive -Name $up -PSProvider FileSystem -ErrorAction SilentlyContinue
+        $powered = Test-VmPoweredOn -Vm $vm -RunningList $running
+        $state =
+            if (-not $drive)            { if ($powered) { "не смонтирован" } else { "машина выключена" } }
+            elseif (-not $powered)      { "ОТВАЛИЛСЯ (машина выключена) — снять: .\vmfleet.ps1 unmount $($vm.id)" }
+            elseif ($drive.DisplayRoot -ne $unc) { "чужое монтирование: $($drive.DisplayRoot)" }
+            elseif (Test-Path "${up}:\") { "подключён" }
+            else                        { "ОТВАЛИЛСЯ (диск не отвечает) — повторить: .\vmfleet.ps1 mount $($vm.id)" }
+
+        $rows += [PSCustomObject]@{
+            'Буква'     = "${up}:"
+            'Проект'    = if ($vm.host.mount_label) { $vm.host.mount_label } elseif ($vm.project) { $vm.project } else { '-' }
+            'Машина'    = $vm.id
+            'Путь'      = if ($unc) { $unc } else { '-' }
+            'Состояние' = $state
+        }
+    }
+
+    if ($rows.Count -eq 0) {
+        Write-Host "Ни у одной машины парка не задан host.mount_letter — монтировать нечего."
+    } else {
+        Write-Host (ConvertTo-MarkdownTable $rows)
+    }
+
+    # Осиротевшие: сетевой диск на \\sshfs\, которого нет в инвентаре — снимаем .
+    foreach ($d in Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue) {
+        if ($d.DisplayRoot -like '\\sshfs\*' -and $knownUnc -notcontains $d.DisplayRoot) {
+            Write-Log "mounts: осиротевшее монтирование $($d.Name): -> $($d.DisplayRoot) — снимаю (нет в инвентаре)"
+            net use "$($d.Name):" /delete /y 2>&1 | Out-Null
+            Remove-MountLabel -UncPath $d.DisplayRoot
+        }
+    }
+}
+
+
+
+# ---------------------------------------------------------------------------
 # activate / deactivate — сетевая часть реализована; подъём dev-сервера/монтирование зависит
 # от devctl на госте (см. docs/GOLDEN_IMAGE.md), пока минимальная заглушка.
 # ---------------------------------------------------------------------------
@@ -540,13 +853,25 @@ function Invoke-Activate {
     }
     if (-not $vm.network.ip) { throw "$VmId без статического IP — сначала провижининг сети" }
 
-    Write-Log "activate: $VmId — сетевая часть OK, dev-сервер/монтирование — через devctl на госте, не реализовано здесь"
+    Write-Log "activate: $VmId — сетевая часть OK, dev-сервер — через devctl на госте"
     Write-Host "Открыть вручную: http://$($vm.network.hostname):3000 (после ssh $VmId 'devctl start')"
+
+    # Монтирование — необязательное удобство: его отсутствие не должно валить activate целиком
+    # (docs/decisions/mounts.md). Предпосылки проверяются мягко, с сообщением.
+    if ($vm.host.mount_letter) {
+        $missing = Get-MountPrereqMissing
+        if ($missing.Count -gt 0) {
+            Write-Host "Диск не смонтирован: не установлено $($missing -join ', ') — см. .\vmfleet.ps1 mounts"
+        } else {
+            Invoke-Mount -VmId $VmId
+        }
+    }
 }
 
 function Invoke-Deactivate {
     param([string]$VmId)
-    Write-Log "deactivate: $VmId — dev-сервер/размонтирование — через devctl на госте, не реализовано здесь"
+    Invoke-Unmount -VmId $VmId
+    Write-Log "deactivate: $VmId — размонтирован; dev-сервер — через devctl на госте, не реализовано здесь"
 }
 
 # ---------------------------------------------------------------------------
@@ -651,6 +976,11 @@ function Invoke-Clone {
         throw "git clone провалился на $NewId (${ip}): $($cloneResult -join ' | ')"
     }
     $remoteHead = (ssh @SshBaseOpts "$SshUser@$ip" "git -C ~/workspace/project rev-parse --short HEAD").Trim()
+
+    # Каталог обмена с оператором — до первого запуска панелей, чтобы агент видел его сразу и читал
+    # блок про screenshots/ из CLAUDE.md проекта.
+    Set-GuestInbox -IpOrHost $ip
+
     ssh @SshBaseOpts "$SshUser@$ip" "~/start-agents.sh"
     Write-Log "clone: $NewId — панели агентов запущены поверх склонированного проекта"
 
@@ -880,4 +1210,7 @@ switch ($Command) {
     'shell-open'   { Invoke-ShellOpen -VmId $Id }
     'shell-close'  { Invoke-ShellClose -VmId $Id }
     'agents-md-install' { Invoke-AgentsMdInstall -VmId $Id -TokenPath $Token -Repo $LibraryRepo }
+    'mount'      { Invoke-Mount -VmId $Id }
+    'unmount'    { Invoke-Unmount -VmId $Id }
+    'mounts'     { Invoke-Mounts }
 }

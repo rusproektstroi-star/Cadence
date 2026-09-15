@@ -156,6 +156,8 @@ A few things worth knowing:
 - Drives are mounted only for running machines. A drive pointing at a powered-off VM will hang Explorer, which is why mounting is tied to activating a project rather than done once at boot.
 - Without the mount, `scp` from PowerShell does exactly the same thing.
 
+This needs two one-time installs on the host — [WinFsp](https://github.com/winfsp/winfsp/releases) and [SSHFS-Win](https://github.com/winfsp/sshfs-win/releases), both installers with a UAC prompt, so a human has to run them. Until they are there, `vmfleet.ps1 mount` tells you exactly what is missing instead of failing with a `net use` error, and everything else keeps working. The commands are `mount <id>`, `unmount <id>` and `mounts` (a table of letter, project, machine and state); `activate` and `deactivate` do it for you. Details: `docs/OPERATIONS.md` §5a, reasoning in `docs/decisions/mounts.md`.
+
 ---
 
 ## Is there voice input?

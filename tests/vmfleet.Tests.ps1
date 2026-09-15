@@ -141,6 +141,9 @@ Describe "Invoke-Validate — обнаружение ошибок схемы" {
         Import-Module powershell-yaml -ErrorAction Stop
         . ([scriptblock]::Create((Get-FunctionSource -Path $ScriptPath -Name "Write-Log")))
         . ([scriptblock]::Create((Get-FunctionSource -Path $ScriptPath -Name "Get-Inventory")))
+        # Invoke-Validate проверяет и поля монтирования — её зависимости тоже нужны в этой области.
+        . ([scriptblock]::Create((Get-FunctionSource -Path $ScriptPath -Name "Test-MountEntry")))
+        . ([scriptblock]::Create((Get-FunctionSource -Path $ScriptPath -Name "Get-MountUncPath")))
         . ([scriptblock]::Create((Get-FunctionSource -Path $ScriptPath -Name "Invoke-Validate")))
 
         $TestRoot = Join-Path ([System.IO.Path]::GetTempPath()) "vmfleet-tests-$([guid]::NewGuid())"
@@ -212,5 +215,105 @@ vms:
         }
 
         Remove-Item -Recurse -Force $TestRoot -ErrorAction SilentlyContinue
+    }
+}
+
+Describe "Get-MountUncPath — сборка UNC для SSHFS" {
+    . ([scriptblock]::Create((Get-FunctionSource -Path $ScriptPath -Name "Get-MountUncPath")))
+
+    It "относительный путь с прямыми слэшами -> UNC с обратными" {
+        Get-MountUncPath -User "dev" -HostName "my-vm.test" -RemotePath "workspace/project" |
+            Should Be '\\sshfs\dev@my-vm.test\workspace\project'
+    }
+
+    It "лишние слэши по краям не дают двойных разделителей" {
+        Get-MountUncPath -User "dev" -HostName "my-vm.test" -RemotePath "/workspace/project/" |
+            Should Be '\\sshfs\dev@my-vm.test\workspace\project'
+    }
+
+    It "работает и по IP, не только по имени" {
+        Get-MountUncPath -User "dev" -HostName "192.168.100.10" -RemotePath "workspace/project" |
+            Should Be '\\sshfs\dev@192.168.100.10\workspace\project'
+    }
+}
+
+Describe "ConvertTo-MountPointKey — имя ключа реестра для подписи диска" {
+    . ([scriptblock]::Create((Get-FunctionSource -Path $ScriptPath -Name "ConvertTo-MountPointKey")))
+
+    It "UNC -> ##sshfs#user@host#path (формат MountPoints2)" {
+        ConvertTo-MountPointKey -UncPath '\\sshfs\dev@my-vm.test\workspace\project' |
+            Should Be '##sshfs#dev@my-vm.test#workspace#project'
+    }
+
+    It "в результате не остаётся обратных слэшей — иначе это вложенный путь реестра, а не ключ" {
+        (ConvertTo-MountPointKey -UncPath '\\sshfs\dev@h\a\b\c').Contains('\') | Should Be $false
+    }
+}
+
+Describe "Test-MountEntry — валидация полей монтирования" {
+    . ([scriptblock]::Create((Get-FunctionSource -Path $ScriptPath -Name "Test-MountEntry")))
+
+    function New-Vm {
+        param($Letter = "X", $Remote = "workspace/project", $Label = "proj", $Inbox = "screenshots")
+        [PSCustomObject]@{
+            id    = "vm1"
+            host  = [PSCustomObject]@{ mount_letter = $Letter; remote_path = $Remote; mount_label = $Label }
+            guest = [PSCustomObject]@{ inbox_dir = $Inbox }
+        }
+    }
+
+    It "корректная запись -> ошибок нет" {
+        (Test-MountEntry -Vm (New-Vm)).Count | Should Be 0
+    }
+
+    It "машина без mount_letter пропускается — монтирование необязательно" {
+        (Test-MountEntry -Vm (New-Vm -Letter $null)).Count | Should Be 0
+    }
+
+    It "mount_letter не одна буква -> ошибка" {
+        (Test-MountEntry -Vm (New-Vm -Letter "XY")).Count | Should BeGreaterThan 0
+    }
+
+    It "буква уже занята другой машиной парка -> ошибка" {
+        (Test-MountEntry -Vm (New-Vm -Letter "X") -UsedLetters @("X")).Count | Should BeGreaterThan 0
+    }
+
+    It 'абсолютный remote_path -> ошибка (путь относителен $HOME гостя)' {
+        (Test-MountEntry -Vm (New-Vm -Remote "/home/dev/workspace")).Count | Should BeGreaterThan 0
+    }
+
+    It "пустой remote_path при заданной букве -> ошибка" {
+        (Test-MountEntry -Vm (New-Vm -Remote $null)).Count | Should BeGreaterThan 0
+    }
+
+    It "пустой mount_label -> ошибка (диски в проводнике не различить)" {
+        (Test-MountEntry -Vm (New-Vm -Label $null)).Count | Should BeGreaterThan 0
+    }
+
+    It "inbox_dir с '..' -> ошибка (должен лежать внутри remote_path)" {
+        (Test-MountEntry -Vm (New-Vm -Inbox "../../etc")).Count | Should BeGreaterThan 0
+    }
+
+    It "абсолютный inbox_dir -> ошибка" {
+        (Test-MountEntry -Vm (New-Vm -Inbox "/tmp/shots")).Count | Should BeGreaterThan 0
+    }
+}
+
+Describe "Get-MountPrereqMissing — проверка WinFsp/SSHFS-Win" {
+    . ([scriptblock]::Create((Get-FunctionSource -Path $ScriptPath -Name "Get-MountPrereqMissing")))
+
+    It "оба пути существуют -> пустой список" {
+        $paths = @{ 'WinFsp' = $env:TEMP; 'SSHFS-Win' = $env:TEMP }
+        (Get-MountPrereqMissing -Paths $paths).Count | Should Be 0
+    }
+
+    It "путь не существует -> имя в списке отсутствующих" {
+        $paths = @{ 'WinFsp' = (Join-Path $env:TEMP "нет-такого-каталога-vmfleet") }
+        (Get-MountPrereqMissing -Paths $paths) | Should Be @("WinFsp")
+    }
+
+    It "отсутствующие возвращаются отсортированными — сообщение не пляшет от вызова к вызову" {
+        $paths = @{ 'WinFsp' = "Z:\нет1"; 'SSHFS-Win' = "Z:\нет2" }
+        (Get-MountPrereqMissing -Paths $paths) | Should Be @("SSHFS-Win", "WinFsp")
     }
 }

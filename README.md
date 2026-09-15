@@ -172,6 +172,7 @@ HOW_TO_RUN.md            — как это запускать: предусло�
 make-shortcut.ps1        — ярлык на рабочий стол: статус парка + агент в один клик
 canon/agent-roles/       — CLAUDE.md для панелей инженера/бюро на образе
 canon/TABS_AND_ROLES.md  — модель ролей и физических мест работы
+canon/project-screenshots-block.md — блок в CLAUDE.md проекта: каталог обмена файлами с оператором
 golden-image/            — файлы для сборки образа (devctl/devpanel/start-agents.sh/systemd/...)
 docs/GOLDEN_IMAGE.md     — пошаговый рецепт сборки образа
 docs/OPERATIONS.md       — операционный runbook (рабочие команды)
