@@ -172,6 +172,7 @@ vmfleet.ps1              — orchestrator (PowerShell, host)
 inventory.yaml.example   — fleet registry template (the real inventory.yaml is gitignored)
 PROMPT.md                — prompt for a from-scratch deployment by an AI agent
 WhatIsIt.md              — what this is and what problems it solves (English)
+FAQ.md                   — questions and answers, incl. bugs already fixed in main
 HOW_TO_RUN.md            — how to run it: prerequisites, daily flow, common gotchas
 make-shortcut.ps1        — desktop shortcut: fleet status + agent in one click
 canon/agent-roles/       — CLAUDE.md for the engineer/bureau panes on the image
