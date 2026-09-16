@@ -316,4 +316,23 @@ Describe "Get-MountPrereqMissing — проверка WinFsp/SSHFS-Win" {
         $paths = @{ 'WinFsp' = "Z:\нет1"; 'SSHFS-Win' = "Z:\нет2" }
         (Get-MountPrereqMissing -Paths $paths) | Should Be @("SSHFS-Win", "WinFsp")
     }
+
+    # Реальная установка 2026-09-16: WinFsp кладёт себя в Program Files (x86), SSHFS-Win — в
+    # обычный Program Files. Проверка по одному пути давала ложное "не установлено".
+    It "достаточно ЛЮБОГО из каталогов-кандидатов — второй может не существовать" {
+        $paths = @{ 'WinFsp' = @("Z:\нет-такого", $env:TEMP) }
+        (Get-MountPrereqMissing -Paths $paths).Count | Should Be 0
+    }
+
+    It "если каталогов нет, но есть ключ реестра — компонент считается установленным" {
+        $paths = @{ 'WinFsp' = @("Z:\нет-такого") }
+        $keys  = @{ 'WinFsp' = @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion") }
+        (Get-MountPrereqMissing -Paths $paths -RegKeys $keys).Count | Should Be 0
+    }
+
+    It "ни каталогов, ни ключей -> компонент в списке отсутствующих" {
+        $paths = @{ 'WinFsp' = @("Z:\нет-такого") }
+        $keys  = @{ 'WinFsp' = @("HKLM:\SOFTWARE\нет-такого-ключа-vmfleet") }
+        (Get-MountPrereqMissing -Paths $paths -RegKeys $keys) | Should Be @("WinFsp")
+    }
 }

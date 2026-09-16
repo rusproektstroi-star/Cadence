@@ -76,9 +76,16 @@ $MaxActiveProjects = 2   # сколько проектов держать одн
 # Монтирование рабочих каталогов гостей на буквы дисков хоста (SSHFS-Win). Буквы раздаются с конца
 # алфавита: новые физические диски Windows нумерует от начала, так они не наступают на проекты.
 $MountLetterPool = @('X', 'Y', 'Z', 'W', 'V', 'U')
+# Оба компонента ставятся в РАЗНЫЕ Program Files: WinFsp — 32-битный инсталлятор, кладёт себя в
+# "Program Files (x86)" и пишет ключ в WOW6432Node; SSHFS-Win — в обычный "Program Files".
+# Проверено на реальной установке: одного жёстко заданного пути недостаточно.
 $MountPrereqPaths = @{
-    'WinFsp'    = "$env:ProgramFiles\WinFsp"
-    'SSHFS-Win' = "$env:ProgramFiles\SSHFS-Win"
+    'WinFsp'    = @("$env:ProgramFiles\WinFsp", "${env:ProgramFiles(x86)}\WinFsp")
+    'SSHFS-Win' = @("$env:ProgramFiles\SSHFS-Win", "${env:ProgramFiles(x86)}\SSHFS-Win")
+}
+$MountPrereqRegKeys = @{
+    'WinFsp'    = @('HKLM:\SOFTWARE\WinFsp', 'HKLM:\SOFTWARE\WOW6432Node\WinFsp')
+    'SSHFS-Win' = @('HKLM:\SOFTWARE\SSHFS-Win', 'HKLM:\SOFTWARE\WOW6432Node\SSHFS-Win')
 }
 $MountLabelRegRoot = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\MountPoints2'
 
@@ -281,11 +288,17 @@ function Test-MountEntry {
 }
 
 function Get-MountPrereqMissing {
-    # Имена отсутствующих предпосылок хоста. Пустой массив = всё на месте.
-    param([hashtable]$Paths = $MountPrereqPaths)
+    # Имена отсутствующих предпосылок хоста. Пустой массив = всё на месте. Компонент считается
+    # установленным, если найден ЛЮБОЙ из его каталогов-кандидатов или ключ реестра — разрядность
+    # инсталлятора у WinFsp и SSHFS-Win разная, одного пути недостаточно.
+    param([hashtable]$Paths = $MountPrereqPaths, [hashtable]$RegKeys = $MountPrereqRegKeys)
     $missing = @()
     foreach ($name in $Paths.Keys) {
-        if (-not (Test-Path $Paths[$name])) { $missing += $name }
+        $found = @($Paths[$name]) | Where-Object { $_ -and (Test-Path $_) }
+        if (-not $found -and $RegKeys -and $RegKeys.ContainsKey($name)) {
+            $found = @($RegKeys[$name]) | Where-Object { $_ -and (Test-Path $_) }
+        }
+        if (-not $found) { $missing += $name }
     }
     return @($missing | Sort-Object)
 }

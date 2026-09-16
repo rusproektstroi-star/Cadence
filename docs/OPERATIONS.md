@@ -247,6 +247,12 @@ ssh <id> "tmux send-keys -t agents:0.0 Enter"
 [SSHFS-Win](https://github.com/winfsp/sshfs-win/releases). Без них команды не падают ошибкой
 `net use`, а печатают, чего не хватает.
 
+Ставятся они в **разные** каталоги: WinFsp — 32-битный инсталлятор, кладёт себя в
+`Program Files (x86)` и пишет ключ в `WOW6432Node`; SSHFS-Win — в обычный `Program Files`. Проверка
+предпосылок это учитывает (оба каталога + реестр), но при ручной сверке смотреть надо оба места.
+Если `winget` ругается `0x8a15000f` («Data required by the source is missing» — сломанный кэш
+источника), проще взять .msi прямо со страниц релизов, чем чинить winget.
+
 **Поля инвентаря** (пример — `inventory.yaml.example`):
 ```yaml
     project: my-project
