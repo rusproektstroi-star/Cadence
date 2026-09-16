@@ -222,18 +222,28 @@ Describe "Get-MountUncPath — сборка UNC для SSHFS" {
     . ([scriptblock]::Create((Get-FunctionSource -Path $ScriptPath -Name "Get-MountUncPath")))
 
     It "относительный путь с прямыми слэшами -> UNC с обратными" {
-        Get-MountUncPath -User "dev" -HostName "my-vm.test" -RemotePath "workspace/project" |
-            Should Be '\\sshfs\dev@my-vm.test\workspace\project'
+        Get-MountUncPath -User "dev" -HostName "my-vm" -RemotePath "workspace/project" |
+            Should Be '\\sshfs.k\dev@my-vm\workspace\project'
     }
 
     It "лишние слэши по краям не дают двойных разделителей" {
-        Get-MountUncPath -User "dev" -HostName "my-vm.test" -RemotePath "/workspace/project/" |
-            Should Be '\\sshfs\dev@my-vm.test\workspace\project'
+        Get-MountUncPath -User "dev" -HostName "my-vm" -RemotePath "/workspace/project/" |
+            Should Be '\\sshfs.k\dev@my-vm\workspace\project'
     }
 
     It "работает и по IP, не только по имени" {
         Get-MountUncPath -User "dev" -HostName "192.168.100.10" -RemotePath "workspace/project" |
-            Should Be '\\sshfs\dev@192.168.100.10\workspace\project'
+            Should Be '\\sshfs.k\dev@192.168.100.10\workspace\project'
+    }
+
+    # sshfs без .k спрашивает пароль интерактивно и в скрипте зависает; .k = аутентификация ключом.
+    It "префикс по умолчанию — sshfs.k (ключевая аутентификация), не sshfs" {
+        (Get-MountUncPath -User "dev" -HostName "h" -RemotePath "p").StartsWith('\\sshfs.k\') | Should Be $true
+    }
+
+    It "префикс можно переопределить явно" {
+        Get-MountUncPath -User "dev" -HostName "h" -RemotePath "p" -Prefix 'sshfs' |
+            Should Be '\\sshfs\dev@h\p'
     }
 }
 

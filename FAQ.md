@@ -156,7 +156,43 @@ A few things worth knowing:
 - Drives are mounted only for running machines. A drive pointing at a powered-off VM will hang Explorer, which is why mounting is tied to activating a project rather than done once at boot.
 - Without the mount, `scp` from PowerShell does exactly the same thing.
 
-This needs two one-time installs on the host — [WinFsp](https://github.com/winfsp/winfsp/releases) and [SSHFS-Win](https://github.com/winfsp/sshfs-win/releases), both installers with a UAC prompt, so a human has to run them. Until they are there, `vmfleet.ps1 mount` tells you exactly what is missing instead of failing with a `net use` error, and everything else keeps working. The commands are `mount <id>`, `unmount <id>` and `mounts` (a table of letter, project, machine and state); `activate` and `deactivate` do it for you. Details: `docs/OPERATIONS.md` §5a, reasoning in `docs/decisions/mounts.md`.
+### The whole path, concretely
+
+One-time on the host: install [WinFsp](https://github.com/winfsp/winfsp/releases), then
+[SSHFS-Win](https://github.com/winfsp/sshfs-win/releases). Both are installers with a UAC prompt, so
+a human runs them. Note they land in *different* places — WinFsp is a 32-bit installer and goes to
+`Program Files (x86)`, SSHFS-Win to `Program Files`. Until both are there, `vmfleet.ps1 mount` tells
+you exactly what is missing and everything else keeps working.
+
+Then, per project:
+
+```powershell
+.\vmfleet.ps1 up -Only my-project-vm      # a drive is only mounted for a running machine
+.\vmfleet.ps1 mount my-project-vm         # X: appears, labelled with the project name
+.\vmfleet.ps1 mounts                      # letter, project, machine, path, state
+```
+
+`.\vmfleet.ps1 status` prints the same thing in its tables: a **Диск** column showing each machine's
+letter and whether it is mounted, and a **Файлы** column with the ready command — either
+`перетащить в X:\screenshots -> агенту: @screenshots/имя.png` when it is mounted, or the `mount`
+command when it is not. Nothing to memorize: copy from the table.
+
+**On the host:** drag the file into `X:\screenshots` (Explorer, an ordinary drive). That is a write
+over SSH straight onto the guest's disk — no copy stays on the host.
+
+**In the agent's pane:** refer to it by a path relative to the project root —
+`@screenshots/bug.png`. The agent's working directory is the project root, which is exactly what the
+drive is mounted to, so the relative path lines up. Saying "look at the screenshot" without a name
+works too: the block that `mount` writes into the project's `CLAUDE.md` tells the agent to check the
+directory for the newest file and confirm which one you meant.
+
+**In git:** nothing appears. `mount` adds the ignore rule where it belongs — `.gitignore` for your
+own repository, `.git/info/exclude` for one you don't own (the `github.own_repo` field in the
+inventory decides, the orchestrator doesn't guess).
+
+`activate` and `deactivate` mount and unmount for you; `down` unmounts before powering the machine
+off, because a drive pointing at a dead VM hangs Explorer. Details: `docs/OPERATIONS.md` §5a,
+reasoning in `docs/decisions/mounts.md`.
 
 ---
 

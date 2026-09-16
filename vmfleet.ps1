@@ -88,6 +88,14 @@ $MountPrereqRegKeys = @{
     'SSHFS-Win' = @('HKLM:\SOFTWARE\SSHFS-Win', 'HKLM:\SOFTWARE\WOW6432Node\SSHFS-Win')
 }
 $MountLabelRegRoot = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\MountPoints2'
+# Монтируем запуском sshfs-win в сессии пользователя, а НЕ через `net use`: `net use` отдаёт работу
+# службе WinFsp.Launcher, а в её контексте не читается ~/.ssh/config пользователя — ключ не
+# находится и mount падает с "System error 67". Тот же UNC, запущенный напрямую, монтируется сразу.
+$SshfsWinExe = @("$env:ProgramFiles\SSHFS-Win\bin\sshfs-win.exe", "${env:ProgramFiles(x86)}\SSHFS-Win\bin\sshfs-win.exe")
+# Том держит процесс sshfs.exe, у которого в командной строке нет ни буквы диска, ни адреса, а
+# fsptool lsvol показывает тома без PID — сопоставить «диск -> процесс» постфактум нечем, поэтому
+# PID запоминается при монтировании (убийство обёртки sshfs-win сам том не снимает).
+$MountStateFile = Join-Path $LogDir "mounts-state.json"
 
 if (-not (Test-Path $VmrunPath)) {
     throw "vmrun не найден по пути '$VmrunPath' — проверить установку VMware Workstation."
@@ -243,10 +251,13 @@ function Get-FreeHostMemMB {
 # Монтирование — чистые помощники (без обращения к сети/реестру, покрыты тестами)
 # ---------------------------------------------------------------------------
 function Get-MountUncPath {
-    # \\sshfs\user@host\workspace/project -> в UNC разделитель обратный слэш
-    param([string]$User, [string]$HostName, [string]$RemotePath)
+    # \\sshfs.k\user@host\workspace/project -> в UNC разделитель обратный слэш.
+    # Префикс sshfs.k = аутентификация по ключу (sshfs без .k спрашивает пароль интерактивно).
+    # HostName — это АЛИАС из ~/.ssh/config (совпадает с id машины), не .test-имя и не IP: ключ
+    # (IdentityFile) прописан в конфиге именно на алиас.
+    param([string]$User, [string]$HostName, [string]$RemotePath, [string]$Prefix = 'sshfs.k')
     $rel = ($RemotePath -replace '/', '\').Trim('\')
-    return "\\sshfs\$User@$HostName\$rel"
+    return "\\$Prefix\$User@$HostName\$rel"
 }
 
 function ConvertTo-MountPointKey {
@@ -474,10 +485,14 @@ function Invoke-Status {
             "RAM (MB)" = $ramMb
             IP         = $vm.network.ip
             Tmux       = $tmuxInfo
+            Диск       = if ($vm.host.mount_letter) {
+                              $ml = $vm.host.mount_letter.ToUpper()
+                              if (Test-Path "${ml}:\") { "${ml}: (смонтирован)" } else { "${ml}: (не смонтирован)" }
+                          } else { "-" }
         }
 
         # Отдельный блок ниже таблицы, не колонки — длинные ssh-команды в узком терминале
-        # переносятся и визуально сливаются с соседней колонкой.
+        # переносятся и визуально сливаются с соседней колонкой (найдено на живом сеансе).
         $details += [PSCustomObject]@{
             Id       = $vm.id
             Power    = if ($isUp) { ".\vmfleet.ps1 down -Only $($vm.id)" } else { ".\vmfleet.ps1 up -Only $($vm.id)" }
@@ -486,14 +501,21 @@ function Invoke-Status {
             # Не форсировать команду через -t — обычный логин-шелл, инструмент запускается
             # руками (баннер при логине подсказывает список). Форсированный "-t 'cd ... &&
             # devpanel'" рвёт соединение сразу по выходу из devpanel и не даёт обычный шелл
-            # для остального (mc, git) в той же вкладке.
+            # для остального (mc, git) в той же вкладке — найдено на живом тесте 2026-09-13.
             Devpanel = "ssh $($vm.id)  # затем: cd ~/workspace/project && devpanel"
+            Файлы    = if ($vm.host.mount_letter) {
+                            $ml = $vm.host.mount_letter.ToUpper()
+                            $inbox = if ($vm.guest.inbox_dir) { $vm.guest.inbox_dir } else { 'screenshots' }
+                            if (Test-Path "${ml}:\") { "перетащить в ${ml}:\$inbox -> агенту: @$inbox/имя.png" }
+                            else { ".\vmfleet.ps1 mount $($vm.id)  # затем ${ml}:\$inbox" }
+                        } else { "-" }
         }
     }
     Write-Host (ConvertTo-MarkdownTable $rows)
 
-    # Машины, реально включённые (по vmrun list), но отсутствующие в inventory.yaml — иначе
-    # невидимы в status целиком, хотя занимают ОЗУ хоста и влияют на то, кого можно/нельзя гасить.
+    # Машины, реально включённые (по vmrun list), но отсутствующие в inventory.yaml — раньше были
+    # невидимы в status целиком, хотя занимают ОЗУ хоста и влияют на то, кого можно/нельзя гасить
+    # (найдено вживую 2026-09-12 — Ubuntu26/loopos-vm включена, но не в инвентаре).
     $trackedVmx = @($inv.vms | ForEach-Object { $_.vmx })
     $runningVmxPaths = @(($running -split "`n") | Where-Object { $_ -match '\.vmx$' })
     $untracked = @($runningVmxPaths | Where-Object { $_ -notin $trackedVmx })
@@ -670,6 +692,51 @@ function Get-RunningVmxList {
     return ($r.Output -join "`n")
 }
 
+function Get-MountState {
+    if (-not (Test-Path $MountStateFile)) { return @{} }
+    try {
+        $obj = Get-Content $MountStateFile -Raw | ConvertFrom-Json
+        $h = @{}
+        foreach ($p in $obj.PSObject.Properties) { $h[$p.Name] = $p.Value }
+        return $h
+    } catch { return @{} }
+}
+
+function Set-MountState {
+    param([hashtable]$State)
+    ($State | ConvertTo-Json -Depth 5) | Set-Content $MountStateFile -Encoding UTF8
+}
+
+function Stop-MountProcess {
+    # Снять том = остановить процессы, которые его держат: обёртку sshfs-win и её потомка sshfs.exe.
+    # PID'ы взяты из состояния, записанного при монтировании — вслепую убивать sshfs.exe нельзя,
+    # при нескольких смонтированных проектах это снесло бы чужой диск.
+    param([string]$Letter)
+    $state = Get-MountState
+    $up = $Letter.ToUpper()
+    $killed = 0
+    if ($state.ContainsKey($up)) {
+        foreach ($pid_ in @($state[$up].wrapper_pid, $state[$up].fuse_pid)) {
+            if ($pid_ -and (Get-Process -Id $pid_ -ErrorAction SilentlyContinue)) {
+                Stop-Process -Id $pid_ -Force -ErrorAction SilentlyContinue
+                Write-Log "unmount: остановлен PID $pid_ (${up}:)"
+                $killed++
+            }
+        }
+        $state.Remove($up)
+        Set-MountState -State $state
+    }
+    if ($killed -eq 0) {
+        # Диск есть, но в состоянии его нет — монтировал не этот оркестратор (или файл состояния
+        # потерян). Не гадаем, какой из sshfs.exe чей: сообщаем факт, решение за оператором.
+        $orphanPids = @(Get-Process -Name sshfs -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
+        if (Test-Path "${up}:\") {
+            Write-Log "unmount: ${up}: держит процесс вне учёта оркестратора. Живые sshfs.exe: $($orphanPids -join ', ') — снять вручную (Stop-Process -Id <PID>)"
+        }
+    }
+    return $killed
+}
+
 function Test-VmPoweredOn {
     param($Vm, [string]$RunningList)
     if (-not $PSBoundParameters.ContainsKey('RunningList')) { $RunningList = Get-RunningVmxList }
@@ -677,7 +744,7 @@ function Test-VmPoweredOn {
 }
 
 function Set-GuestInbox {
-    # Готовит каталог обмена на госте : сам каталог, правило игнорирования по
+    # Готовит каталог обмена на госте (ТЗ_монтирование §5): сам каталог, правило игнорирования по
     # полю инвентаря (не угадывая), и блок про screenshots/ в CLAUDE.md проекта. Идемпотентно.
     param(
         [string]$IpOrHost,
@@ -686,7 +753,10 @@ function Set-GuestInbox {
         [bool]$OwnRepo = $true
     )
     if (-not $InboxDir) { return }
-    $proj = "`$HOME/$($RemotePath.Trim('/'))"
+    # Путь ОТНОСИТЕЛЬНЫЙ: неинтерактивный ssh стартует в домашнем каталоге. Через "$HOME" нельзя —
+    # внутри одинарных кавычек bash его не раскрывает, и вместо каталога проекта создаётся
+    # буквальный каталог с именем "$HOME" (наступили на это вживую 2026-09-16).
+    $proj = $RemotePath.Trim('/')
     $ignoreTarget = if ($OwnRepo) { "$proj/.gitignore" } else { "$proj/.git/info/exclude" }
 
     # mkdir + .gitkeep + строка игнорирования, если её там ещё нет.
@@ -707,8 +777,8 @@ fi
     Write-Log "inbox: $IpOrHost — каталог '$InboxDir' готов; $($res -join ' ')"
 
     # Блок в CLAUDE.md проекта — дописываем, если его там нет. Не коммитим: это чужой репозиторий,
-    # коммит делает инженер проекта (docs/decisions/mounts.md).
-    $blockPath = Join-Path $Root "canon\project-screenshots-block.md"
+    # коммит делает инженер проекта (решение mounts.md).
+    $blockPath = Join-Path $Root "reference\project-screenshots-block.md"
     if (Test-Path $blockPath) {
         $block = (Get-Content $blockPath -Raw) -replace "`r`n", "`n"
         $marker = '## Каталог screenshots/'
@@ -742,21 +812,22 @@ function Invoke-Mount {
     $entryErrors = Test-MountEntry -Vm $vm
     if ($entryErrors.Count -gt 0) { throw ($entryErrors -join "; ") }
 
-    # Монтируются только включённые машины : диск на выключенную ВМ подвешивает проводник,
+    # Монтируются только включённые машины (ТЗ §4.1): диск на выключенную ВМ подвешивает проводник,
     # и оператор решит, что сломался хост.
     if (-not (Test-VmPoweredOn -Vm $vm)) {
         throw "$VmId выключена — монтировать нельзя (диск на выключенную ВМ вешает проводник). Сначала: .\vmfleet.ps1 up -Only $VmId"
     }
-    $target = if ($vm.network.hostname) { $vm.network.hostname } else { $vm.network.ip }
-    if (-not $target) { throw "$VmId — ни hostname, ни ip в инвентаре, адрес монтирования не собрать" }
+    # Алиас из ~/.ssh/config (= id машины), а не .test-имя и не IP: ключ прописан в конфиге на алиас,
+    # по сырому адресу sshfs его не найдёт и упадёт на аутентификации.
+    $alias = $vm.id
 
     # Каталог обмена готовится здесь же: машины, склонированные до этой фазы, иначе остались бы без
     # него, а отдельная команда ради одного mkdir — лишняя сущность. Идемпотентно.
     $ownRepo = if ($null -ne $vm.github.own_repo) { [bool]$vm.github.own_repo } else { $true }
-    Set-GuestInbox -IpOrHost ($vm.network.ip ?? $target) -RemotePath $vm.host.remote_path `
+    Set-GuestInbox -IpOrHost ($vm.network.ip ?? $alias) -RemotePath $vm.host.remote_path `
                    -InboxDir $vm.guest.inbox_dir -OwnRepo $ownRepo
 
-    $unc = Get-MountUncPath -User $SshUser -HostName $target -RemotePath $vm.host.remote_path
+    $unc = Get-MountUncPath -User $SshUser -HostName $alias -RemotePath $vm.host.remote_path
     $up = $letter.ToUpper()
 
     $existing = Get-PSDrive -Name $up -PSProvider FileSystem -ErrorAction SilentlyContinue
@@ -766,11 +837,30 @@ function Invoke-Mount {
     }
     if ($existing) { throw "Буква ${up}: занята ($($existing.DisplayRoot)) — освободить или сменить mount_letter в инвентаре" }
 
-    # /persistent:no обязателен : восстановление при входе в Windows произойдёт раньше,
-    # чем поднимется ВМ, и проводник повиснет.
-    Write-Log "mount: $VmId — net use ${up}: $unc /persistent:no"
-    $out = net use "${up}:" $unc /persistent:no 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "Монтирование не удалось: $($out -join ' ')" }
+    $exe = @($SshfsWinExe) | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $exe) { throw "sshfs-win.exe не найден — SSHFS-Win установлен не полностью" }
+
+    # Аргумент — тот же UNC, но с ОДНИМ ведущим слэшем (так его принимает sshfs-win).
+    $uncArg = $unc.Substring(1)
+    Write-Log "mount: $VmId — sshfs-win svc $uncArg ${up}: $SshUser"
+    $wrapper = Start-Process -FilePath $exe -ArgumentList @('svc', $uncArg, "${up}:", $SshUser) -WindowStyle Hidden -PassThru
+
+    # Процесс поднимает файловую систему не мгновенно; ждём появления буквы, а не спим наугад.
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($sw.Elapsed.TotalSeconds -lt 20) {
+        if (Test-Path "${up}:\") { break }
+        Start-Sleep -Milliseconds 500
+    }
+    if (-not (Test-Path "${up}:\")) {
+        throw "Монтирование не удалось: ${up}: не появился за 20 с. Проверить вручную: ssh $alias 'echo ok' и наличие записи '$alias' в ~/.ssh/config с IdentityFile"
+    }
+
+    # Запоминаем, кто держит том: обёртка и её потомок sshfs.exe — иначе снять его будет нечем.
+    $fuse = Get-CimInstance Win32_Process -Filter "Name='sshfs.exe' AND ParentProcessId=$($wrapper.Id)" -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    $state = Get-MountState
+    $state[$up] = @{ vm = $VmId; unc = $unc; wrapper_pid = $wrapper.Id; fuse_pid = $fuse.ProcessId; mounted_at = (Get-Date).ToString('s') }
+    Set-MountState -State $state
 
     $label = if ($vm.host.mount_label) { $vm.host.mount_label } else { $vm.project }
     if ($label) { Set-MountLabel -UncPath $unc -Label $label }
@@ -792,9 +882,15 @@ function Invoke-Unmount {
         return
     }
     $unc = $drive.DisplayRoot
-    net use "${up}:" /delete /y 2>&1 | Out-Null
+    Stop-MountProcess -Letter $up | Out-Null
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($sw.Elapsed.TotalSeconds -lt 10 -and (Test-Path "${up}:\")) { Start-Sleep -Milliseconds 300 }
     if ($unc) { Remove-MountLabel -UncPath $unc }
-    Write-Log "unmount: $VmId — ${up}: снят"
+    if (Test-Path "${up}:\") {
+        Write-Log "unmount: $VmId — ${up}: ВСЁ ЕЩЁ смонтирован (см. сообщение выше)"
+    } else {
+        Write-Log "unmount: $VmId — ${up}: снят"
+    }
 }
 
 function Invoke-Mounts {
@@ -812,8 +908,7 @@ function Invoke-Mounts {
         $letter = $vm.host.mount_letter
         if (-not $letter) { continue }
         $up = $letter.ToUpper()
-        $target = if ($vm.network.hostname) { $vm.network.hostname } else { $vm.network.ip }
-        $unc = if ($vm.host.remote_path -and $target) { Get-MountUncPath -User $SshUser -HostName $target -RemotePath $vm.host.remote_path } else { $null }
+        $unc = if ($vm.host.remote_path) { Get-MountUncPath -User $SshUser -HostName $vm.id -RemotePath $vm.host.remote_path } else { $null }
         if ($unc) { $knownUnc += $unc }
 
         $drive = Get-PSDrive -Name $up -PSProvider FileSystem -ErrorAction SilentlyContinue
@@ -840,11 +935,11 @@ function Invoke-Mounts {
         Write-Host (ConvertTo-MarkdownTable $rows)
     }
 
-    # Осиротевшие: сетевой диск на \\sshfs\, которого нет в инвентаре — снимаем .
+    # Осиротевшие: диск на \\sshfs*, которого нет в инвентаре — снимаем (ТЗ §4.5).
     foreach ($d in Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue) {
-        if ($d.DisplayRoot -like '\\sshfs\*' -and $knownUnc -notcontains $d.DisplayRoot) {
+        if ($d.DisplayRoot -like '\\sshfs*' -and $knownUnc -notcontains $d.DisplayRoot) {
             Write-Log "mounts: осиротевшее монтирование $($d.Name): -> $($d.DisplayRoot) — снимаю (нет в инвентаре)"
-            net use "$($d.Name):" /delete /y 2>&1 | Out-Null
+            Stop-MountProcess -Letter $d.Name | Out-Null
             Remove-MountLabel -UncPath $d.DisplayRoot
         }
     }
