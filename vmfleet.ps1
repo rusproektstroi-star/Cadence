@@ -489,6 +489,14 @@ function Invoke-Status {
                               $ml = $vm.host.mount_letter.ToUpper()
                               if (Test-Path "${ml}:\") { "${ml}: (смонтирован)" } else { "${ml}: (не смонтирован)" }
                           } else { "-" }
+            # Место этой колонки — здесь, рядом с буквой диска, а НЕ в таблице Connect: там она была
+            # шестой, строка вырастала до ~240 символов, таблица не помещалась в окно и рендер рвал
+            # команды переносом внутри ячеек (2026-09-16). Здесь строка ~110 символов — помещается.
+            Файлы      = if ($vm.host.mount_letter) {
+                              $ml = $vm.host.mount_letter.ToUpper()
+                              $inbox = if ($vm.guest.inbox_dir) { $vm.guest.inbox_dir } else { 'screenshots' }
+                              if (Test-Path "${ml}:\") { "${ml}:\$inbox -> @$inbox/" } else { "mount $($vm.id)" }
+                          } else { "-" }
         }
 
         # Отдельный блок ниже таблицы, не колонки — длинные ssh-команды в узком терминале
@@ -502,13 +510,11 @@ function Invoke-Status {
             # руками (баннер при логине подсказывает список). Форсированный "-t 'cd ... &&
             # devpanel'" рвёт соединение сразу по выходу из devpanel и не даёт обычный шелл
             # для остального (mc, git) в той же вкладке — найдено на живом тесте 2026-09-13.
+            # Шестой колонки («Файлы») здесь быть не должно: с ней строка выросла со ~180 до ~240
+            # символов, таблица перестала помещаться в окно, и рендер начал переносить текст ВНУТРИ
+            # ячеек — команды разорвались на куски, мышью целиком уже не выделяются (2026-09-16).
+            # Подсказка про передачу файлов — строкой под таблицей, ширину она не трогает.
             Devpanel = "ssh $($vm.id)  # затем: cd ~/workspace/project && devpanel"
-            Файлы    = if ($vm.host.mount_letter) {
-                            $ml = $vm.host.mount_letter.ToUpper()
-                            $inbox = if ($vm.guest.inbox_dir) { $vm.guest.inbox_dir } else { 'screenshots' }
-                            if (Test-Path "${ml}:\") { "перетащить в ${ml}:\$inbox -> агенту: @$inbox/имя.png" }
-                            else { ".\vmfleet.ps1 mount $($vm.id)  # затем ${ml}:\$inbox" }
-                        } else { "-" }
         }
     }
     Write-Host (ConvertTo-MarkdownTable $rows)
@@ -533,6 +539,8 @@ function Invoke-Status {
     Write-Host "`n**Host RAM**: free $free MB | used by tracked VMs $totalUsedByVms MB | used by untracked VMs $totalUntrackedRam MB`n"
     Write-Host "**Connect:**`n"
     Write-Host (ConvertTo-MarkdownTable $details)
+
+    Write-Host "`nКоманды одной машины по строкам (и копирование в буфер): .\vmfleet.ps1 connect <id> [-Only ssh|agents|devpanel|power|files]"
 }
 
 function Invoke-Health {
