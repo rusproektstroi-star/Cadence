@@ -692,6 +692,29 @@ function Get-RunningVmxList {
     return ($r.Output -join "`n")
 }
 
+function Update-ExplorerDrive {
+    # Проводник кеширует список дисков и после исчезновения тома продолжает показывать мёртвую
+    # запись ("Location is not available" при клике) — пока не обновит вид сам. Штатный способ
+    # сказать оболочке "диск появился/исчез" — SHChangeNotify; без него запись висит до F5
+    # или перезапуска explorer.exe (наблюдалось вживую 2026-09-16).
+    param([string]$Letter, [ValidateSet('added','removed')][string]$Event)
+    if (-not ('Win32.ShellNotify' -as [type])) {
+        Add-Type -Namespace Win32 -Name ShellNotify -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("shell32.dll", CharSet = System.Runtime.InteropServices.CharSet.Auto)]
+public static extern void SHChangeNotify(int wEventId, int uFlags, System.IntPtr dwItem1, System.IntPtr dwItem2);
+'@ -ErrorAction SilentlyContinue
+    }
+    try {
+        $SHCNE_DRIVEADD = 0x00000100; $SHCNE_DRIVEREMOVED = 0x00000080; $SHCNF_PATH = 0x0005
+        $id = if ($Event -eq 'added') { $SHCNE_DRIVEADD } else { $SHCNE_DRIVEREMOVED }
+        $ptr = [System.Runtime.InteropServices.Marshal]::StringToHGlobalAuto("$($Letter.ToUpper()):\")
+        [Win32.ShellNotify]::SHChangeNotify($id, $SHCNF_PATH, $ptr, [System.IntPtr]::Zero)
+        [System.Runtime.InteropServices.Marshal]::FreeHGlobal($ptr)
+    } catch {
+        Write-Log "explorer-refresh: не удалось уведомить оболочку про ${Letter}: — $($_.Exception.Message)"
+    }
+}
+
 function Get-MountState {
     if (-not (Test-Path $MountStateFile)) { return @{} }
     try {
@@ -864,6 +887,7 @@ function Invoke-Mount {
 
     $label = if ($vm.host.mount_label) { $vm.host.mount_label } else { $vm.project }
     if ($label) { Set-MountLabel -UncPath $unc -Label $label }
+    Update-ExplorerDrive -Letter $up -Event 'added'
     Write-Log "mount: $VmId — ${up}: подключён, подпись '$label'"
     Write-Host "${up}: -> $unc   (подпись в проводнике: $label)"
 }
@@ -889,6 +913,7 @@ function Invoke-Unmount {
     if (Test-Path "${up}:\") {
         Write-Log "unmount: $VmId — ${up}: ВСЁ ЕЩЁ смонтирован (см. сообщение выше)"
     } else {
+        Update-ExplorerDrive -Letter $up -Event 'removed'
         Write-Log "unmount: $VmId — ${up}: снят"
     }
 }
