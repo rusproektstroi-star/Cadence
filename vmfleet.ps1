@@ -10,7 +10,7 @@
 
 param(
     [Parameter(Position = 0, Mandatory = $true)]
-    [ValidateSet('validate', 'up', 'down', 'status', 'health', 'ssh-config', 'hosts-file', 'activate', 'deactivate', 'snapshot', 'revert', 'clone', 'check-sync', 'dev-start', 'dev-stop', 'dev-status', 'dev-reap', 'dev-watchdog', 'install-dev-watchdog-task', 'shell-open', 'shell-close', 'agents-md-install', 'mount', 'unmount', 'mounts')]
+    [ValidateSet('validate', 'up', 'down', 'status', 'health', 'ssh-config', 'hosts-file', 'activate', 'deactivate', 'snapshot', 'revert', 'clone', 'check-sync', 'dev-start', 'dev-stop', 'dev-status', 'dev-reap', 'dev-watchdog', 'install-dev-watchdog-task', 'shell-open', 'shell-close', 'agents-md-install', 'mount', 'unmount', 'mounts', 'connect')]
     [string]$Command,
 
     [Parameter(Position = 1)]
@@ -918,6 +918,49 @@ function Invoke-Unmount {
     }
 }
 
+function Invoke-Connect {
+    # Таблица status удобна для чата, но неудобна для мыши: выделение тянется через все столбцы, а
+    # блочное выделение (Alt+протяжка) есть не в каждом терминале. Здесь — по одной команде на
+    # строку, плюс -Copy кладёт нужную прямо в буфер обмена, чтобы выделять вообще не пришлось.
+    param([string]$VmId, [string]$What)
+    $inv = Get-Inventory
+    $vm = Get-VmEntry $inv $VmId
+    $isUp = Test-VmPoweredOn -Vm $vm
+
+    $cmds = [ordered]@{
+        ssh      = "ssh $($vm.id)"
+        agents   = "ssh $($vm.id) -t 'tmux attach -t agents'"
+        devpanel = "ssh $($vm.id)"
+        power    = if ($isUp) { ".\vmfleet.ps1 down -Only $($vm.id)" } else { ".\vmfleet.ps1 up -Only $($vm.id)" }
+    }
+    if ($vm.host.mount_letter) {
+        $ml = $vm.host.mount_letter.ToUpper()
+        $inbox = if ($vm.guest.inbox_dir) { $vm.guest.inbox_dir } else { 'screenshots' }
+        $cmds['files'] = if (Test-Path "${ml}:\") { "${ml}:\$inbox" } else { ".\vmfleet.ps1 mount $($vm.id)" }
+    }
+
+    if ($What) {
+        $key = $What.ToLower()
+        if (-not $cmds.Contains($key)) { throw "Нет команды '$What'. Есть: $($cmds.Keys -join ', ')" }
+        Set-Clipboard -Value $cmds[$key]
+        Write-Host "В буфер обмена: $($cmds[$key])"
+        return
+    }
+
+    Write-Host "$($vm.id) — $(if ($isUp) { 'включена' } else { 'выключена' })"
+    Write-Host ""
+    foreach ($k in $cmds.Keys) {
+        $note = switch ($k) {
+            'devpanel' { "   # затем на госте: cd ~/workspace/project && devpanel" }
+            'files'    { if ($vm.host.mount_letter -and (Test-Path "$($vm.host.mount_letter.ToUpper()):\")) { "   # перетащить файл сюда; агенту: @$(if ($vm.guest.inbox_dir) { $vm.guest.inbox_dir } else { 'screenshots' })/имя.png" } else { "   # смонтировать диск" } }
+            default    { "" }
+        }
+        Write-Host ("{0,-10} {1}{2}" -f "$k`:", $cmds[$k], $note)
+    }
+    Write-Host ""
+    Write-Host "Скопировать без выделения: .\vmfleet.ps1 connect $($vm.id) -Only <$($cmds.Keys -join '|')>"
+}
+
 function Invoke-Mounts {
     $inv = Get-Inventory
     $missing = Get-MountPrereqMissing
@@ -1346,4 +1389,5 @@ switch ($Command) {
     'mount'      { Invoke-Mount -VmId $Id }
     'unmount'    { Invoke-Unmount -VmId $Id }
     'mounts'     { Invoke-Mounts }
+    'connect'    { Invoke-Connect -VmId $Id -What $Only }
 }
