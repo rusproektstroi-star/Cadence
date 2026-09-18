@@ -13,13 +13,27 @@
 Один пользователь (в этом документе — `<VM_USER>`, тот же аккаунт, что потом укажете в блоке
 «КОНФИГ» `vmfleet.ps1` как `$SshUser`), с SSH-доступом по ключу.
 
+**Память образа — от 3072 МБ**, и задаётся она именно здесь: клоны наследуют `memsize` из `.vmx`
+образа. 2048 МБ проверены практикой как недостаточные — гость дважды вставал намертво под двумя
+работающими сессиями агентов (разбор — `docs/OPERATIONS.md` §7). Меньше 3072 имеет смысл ставить,
+только если на машине заведомо работает одна роль, а не две.
+
 ## 1. Базовые пакеты
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y git tmux jq curl wget micro unzip ca-certificates gpg mc
+sudo apt-get install -y git tmux jq curl wget micro unzip ca-certificates gpg mc moreutils
 sudo systemctl set-default multi-user.target   # без графики — она и не нужна
+
+# Фоновые обновления выключаются на образе, а не на каждом клоне. Причина не в идеологии:
+# apt-daily-upgrade поверх двух работающих сессий агентов на ~1.6 ГБ памяти клал гостя намертво
+# (тред-лок по памяти при активном vmw_balloon, до OOM-киллера ядро не доходило). Разбор —
+# docs/OPERATIONS.md §7. Обновлять пакеты — руками и осознанно.
+sudo systemctl disable --now apt-daily.timer apt-daily-upgrade.timer \
+                             unattended-upgrades.service fwupd-refresh.timer motd-news.timer
 ```
+
+`moreutils` — ради `ts` (штамп времени в потоке вывода), он нужен при записи демонстраций и логов.
 
 ## 2. Node.js + Claude Code + GitHub CLI
 

@@ -242,6 +242,8 @@ Installation bugs get fixed the day they're reported. The project has been insta
 | Hosts file changes silently ignored | Not running as administrator |
 | Two VMs fighting over an address | Clone identity not reset: same machine-id, same DHCP client id |
 | A `vmrun` command "succeeded" but nothing happened | `vmrun` can exit 0 on a failed operation — verify state, not exit codes |
+| VM shows as running, Tools alive, but answers neither SSH nor ping | Memory thrash under `vmw_balloon` — the kernel locks up before the OOM killer ever runs. Ours was triggered by the daily `apt-daily-upgrade` on top of two agent sessions. The image now ships with those timers disabled; `docs/OPERATIONS.md` §7 |
+| An agent reports "sudo needs a password" and stops | It tested `sudo -n true`. Only specific commands are passwordless — `true` isn't one. Check with `sudo -n -l`; `docs/OPERATIONS.md` §0 |
 
 ---
 

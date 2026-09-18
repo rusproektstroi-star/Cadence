@@ -11,7 +11,9 @@ vms:
     role: golden-template          # не поднимается как проектная машина, шаблон для vmfleet clone
     vmx: E:\Virtual Machines\cli-golden\cli-golden.vmx
     hostname: cli-golden
-    memsize: 2048                  # см. docs/GOLDEN_IMAGE.md — замерить под свою нагрузку
+    memsize: 3072                  # две сессии агентов на 2048 не влезают — проверено двумя
+                                   # зависаниями подряд (docs/OPERATIONS.md §7); замерьте под свою
+                                   # нагрузку, но ниже 3072 не опускайтесь без причины
     numvcpus: 2
     agents:
       - name: engineer
@@ -40,7 +42,7 @@ vms:
     role: project
     vmx: E:\Virtual Machines\my-project-vm\my-project-vm.vmx
     hostname: my-project-vm
-    memsize: 2048
+    memsize: 3072
     numvcpus: 2
     agents:
       - name: engineer
