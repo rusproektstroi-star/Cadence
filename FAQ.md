@@ -37,7 +37,9 @@ On 16 GB: up to 8 powered on, of which **no more than two running dev servers at
 
 Those are different numbers. An idle VM whose agent is waiting for work costs roughly 600–800 MB of host RAM. A VM with a dev server under active testing costs 1.3–1.8 GB, and the browser profile you test it with costs another 800–1500 MB on the host.
 
-`memsize` is set to 2048 for every machine and never changed at runtime. It's a ceiling, not a reservation — VMware allocates on demand. Budget is enforced by measuring actual free host RAM, not by adding up allocations.
+`memsize` is 3072 per machine and never changed at runtime. Budget is enforced by measuring actual free host RAM, not by adding up allocations.
+
+One caveat worth knowing before you tune anything: leave VMware's memory ballooning **off** for these VMs (`sched.mem.maxmemctl = "0"` in the `.vmx`). With it on, the hypervisor reclaims memory from a perfectly healthy guest and the guest locks up — no OOM, no message, just a frozen VM. Details in `docs/OPERATIONS.md` §7.
 
 ---
 
@@ -242,7 +244,7 @@ Installation bugs get fixed the day they're reported. The project has been insta
 | Hosts file changes silently ignored | Not running as administrator |
 | Two VMs fighting over an address | Clone identity not reset: same machine-id, same DHCP client id |
 | A `vmrun` command "succeeded" but nothing happened | `vmrun` can exit 0 on a failed operation — verify state, not exit codes |
-| VM shows as running, Tools alive, but answers neither SSH nor ping | Memory thrash under `vmw_balloon` — the kernel locks up before the OOM killer ever runs. Ours was triggered by the daily `apt-daily-upgrade` on top of two agent sessions. The image now ships with those timers disabled; `docs/OPERATIONS.md` §7 |
+| VM shows as running, Tools alive, but answers neither SSH nor ping | The hypervisor is taking memory back from a live guest: `vmballoon_work` floods the kernel while the guest's journal shows no OOM at all. Disable ballooning in the `.vmx` (`sched.mem.maxmemctl = "0"`, `MemTrimRate = "0"`, `sched.mem.pin = "TRUE"`); adding RAM does not fix it. `docs/OPERATIONS.md` §7 |
 | An agent reports "sudo needs a password" and stops | It tested `sudo -n true`. Only specific commands are passwordless — `true` isn't one. Check with `sudo -n -l`; `docs/OPERATIONS.md` §0 |
 
 ---
