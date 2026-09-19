@@ -1,37 +1,107 @@
 #!/bin/bash
-# vitals — пульс изнутри гостя раз в 5 секунд.
-# Ключевое поле — drift: насколько фактический интервал отличается от 5 с. Если гость встал,
-# следующая строка придёт с drift=90 и покажет, что творилось ПЕРЕД остановкой. Разреженность
-# журнала при этом ни при чём — мерим собственным таймером, а не чужими записями.
+# vitals — пульс гостя с поиском виновника.
+#
+# Архитектура взята из figma_prevent (Figma Kill script): кольцевой буфер замеров, производные
+# первого и второго порядка, состояния OK/WARNING/CRITICAL и аварийный сброс буфера на диск в
+# момент срабатывания. Смысл: подробности по процессам нужны не всегда, а ровно за те две минуты,
+# что предшествуют беде — их и сохраняем, когда порог перейдён.
+#
+# Почему не `ps %cpu`: она считает среднее за всю жизнь процесса, поэтому только что запущенный
+# `ps` показывает 1600%. Реальную загрузку за интервал даёт pidstat (пакет sysstat).
 set -u
-LOG="$HOME/vitals.log"
-INTERVAL=5
+
+STATE_DIR="$HOME/.local/state/vitals"; mkdir -p "$STATE_DIR"
+LOG="$HOME/vitals.log"                 # одна строка на замер, всегда
+RING="$STATE_DIR/ring.txt"             # кольцевой буфер подробностей
+INTERVAL=3                             # из них ~1 с занимает сам pidstat
+RING_SIZE=40                           # ~2 минуты истории
+LOAD_WARN=2.0
+LOAD_CRIT=3.0
+DRIFT_CRIT=5                           # секунд отставания собственного таймера
+DUMP_COOLDOWN=300                      # не чаще раза в 5 минут
+
 prev=$(date +%s)
+prev_load=0
+state=OK
+last_dump=0
 
 while true; do
   now=$(date +%s)
   drift=$(( now - prev - INTERVAL ))
   prev=$now
 
-  read -r load1 _ < /proc/loadavg
+  read -r load1 _ rest < /proc/loadavg
+  runnable=$(awk '/^procs_running/{print $2}' /proc/stat)
+  blocked=$(awk '/^procs_blocked/{print $2}' /proc/stat)
   mem=$(free -m | awk '/^Mem:/ {printf "%d/%d", $3, $2}')
   swap=$(free -m | awk '/^Swap:/ {print $3}')
-  # процессы в непрерываемом сне (D) — прямой признак застрявшего ввода-вывода
   dstate=$(ps -eo state= | grep -c '^D' || true)
-  # ожидание ввода-вывода и готовность CPU, один замер
-  read -r wa st <<<"$(vmstat 1 2 | tail -1 | awk '{print $16, $17}')"
-  top=$(ps -eo pcpu,comm --sort=-pcpu --no-headers | head -1 | awk '{printf "%s %s%%", $2, $1}')
 
-  flag=""
-  [ "$drift" -gt 10 ] && flag="  <<< ОСТАНОВКА ${drift}с"
+  # Скорость роста нагрузки — первый признак, который был виден в прошлый раз задолго до смерти
+  dload=$(awk -v a="$load1" -v b="$prev_load" -v t="$INTERVAL" 'BEGIN{printf "%.2f", (a-b)/t}')
+  prev_load=$load1
 
-  printf '%s drift=%+ds load=%s mem=%sMB swap=%sMB D=%s wa=%s st=%s top=%s%s\n' \
-    "$(date -Iseconds)" "$drift" "$load1" "$mem" "$swap" "$dstate" "$wa" "$st" "$top" "$flag" >> "$LOG"
+  # Кто ест процессор НА САМОМ ДЕЛЕ — замер за 1 секунду, а не среднее за жизнь процесса
+  top3=$(pidstat -u 1 1 2>/dev/null | awk '
+      /^[0-9]/ || /^[0-9][0-9]:/ {
+          # последние колонки: %CPU CPU Command
+          cpu=$(NF-2); cmd=$NF; pid=$(NF-7)
+          if (cpu+0 > 0.5) printf "%s(%s):%s%% ", cmd, pid, cpu
+      }' | head -c 200)
+  [ -z "$top3" ] && top3="—"
 
-  # держим файл в разумных пределах — сутки при интервале 5 с
+  line=$(printf '%s drift=%+ds load=%s dload=%s run=%s blk=%s mem=%sMB swap=%sMB D=%s | %s' \
+    "$(date -Iseconds)" "$drift" "$load1" "$dload" "$runnable" "$blocked" "$mem" "$swap" "$dstate" "$top3")
+
+  echo "$line" >> "$LOG"
+  echo "$line" >> "$RING"
+  tail -n "$RING_SIZE" "$RING" > "$RING.tmp" 2>/dev/null && mv "$RING.tmp" "$RING"
+
+  # --- состояние ---
+  new_state=OK
+  awk -v l="$load1" -v w="$LOAD_WARN" 'BEGIN{exit !(l+0 >= w)}' && new_state=WARNING
+  awk -v l="$load1" -v c="$LOAD_CRIT" 'BEGIN{exit !(l+0 >= c)}' && new_state=CRITICAL
+  [ "$drift" -ge "$DRIFT_CRIT" ] && new_state=CRITICAL
+
+  if [ "$new_state" != "$state" ]; then
+    echo "$(date -Iseconds) СОСТОЯНИЕ: $state -> $new_state (load=$load1 drift=${drift}s)" >> "$LOG"
+    state=$new_state
+  fi
+
+  # --- аварийный сброс: подробности ровно за период перед бедой ---
+  if [ "$new_state" = "CRITICAL" ] && [ $(( now - last_dump )) -gt "$DUMP_COOLDOWN" ]; then
+    last_dump=$now
+    DUMP="$HOME/vitals-critical-$(date +%Y%m%d-%H%M%S).log"
+    {
+      echo "=== КРИТИЧЕСКОЕ СОСТОЯНИЕ $(date -Iseconds) ==="
+      echo "load=$load1 dload=$dload drift=${drift}s runnable=$runnable blocked=$blocked D=$dstate"
+      echo
+      echo "--- процессы по процессору (замер за 1 с) ---"
+      pidstat -u 1 1 2>/dev/null | tail -n +4
+      echo
+      echo "--- процессы по памяти и времени жизни ---"
+      ps -eo pid,ppid,stat,pcpu,pmem,rss,etimes,args --sort=-pcpu 2>/dev/null | head -20
+      echo
+      echo "--- потоки процессов-лидеров ---"
+      for p in $(ps -eo pid --sort=-pcpu --no-headers | head -3); do
+        echo "PID $p: threads=$(ls /proc/$p/task 2>/dev/null | wc -l) cmd=$(tr '\0' ' ' < /proc/$p/cmdline 2>/dev/null | head -c 120)"
+      done
+      echo
+      echo "--- сеть и панели ---"
+      ss -s 2>/dev/null | head -4
+      tmux list-panes -t agents -F '#{pane_index} #{pane_current_command} pid=#{pane_pid}' 2>/dev/null
+      echo
+      echo "--- история последних $RING_SIZE замеров (примерно 2 минуты до этого момента) ---"
+      cat "$RING"
+    } > "$DUMP" 2>&1
+    sync -d "$DUMP" 2>/dev/null || true
+    echo "$(date -Iseconds) АВАРИЙНЫЙ СНИМОК: $DUMP" >> "$LOG"
+  fi
+
+  # лог не должен расти бесконечно
   if [ "$(( now % 3600 ))" -lt "$INTERVAL" ]; then
     tail -n 20000 "$LOG" > "$LOG.tmp" 2>/dev/null && mv "$LOG.tmp" "$LOG"
   fi
-  sync -d "$LOG" 2>/dev/null || true   # запись должна пережить жёсткую остановку
-  sleep "$INTERVAL"
+  sync -d "$LOG" 2>/dev/null || true
+  sleep $(( INTERVAL - 1 ))   # секунду уже съел pidstat
 done
