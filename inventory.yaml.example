@@ -14,7 +14,8 @@ vms:
     memsize: 3072                  # две сессии агентов на 2048 не влезают — проверено двумя
                                    # зависаниями подряд (docs/OPERATIONS.md §7); замерьте под свою
                                    # нагрузку, но ниже 3072 не опускайтесь без причины
-    numvcpus: 2
+    numvcpus: 4                    # больше, чем сессий агентов на машине: на 2 ядрах две
+                                   # сессии выедают всё и гость встаёт (docs/OPERATIONS.md §7)
     agents:
       - name: engineer
         role: engineer
@@ -43,7 +44,7 @@ vms:
     vmx: E:\Virtual Machines\my-project-vm\my-project-vm.vmx
     hostname: my-project-vm
     memsize: 3072
-    numvcpus: 2
+    numvcpus: 4
     agents:
       - name: engineer
         role: engineer
