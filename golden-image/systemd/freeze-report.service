@@ -1,0 +1,10 @@
+[Unit]
+Description=freeze-report — разбор предыдущей загрузки (обрыв, OOM, разрывы времени)
+After=sysstat.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/bin/freeze-report
+
+[Install]
+WantedBy=default.target

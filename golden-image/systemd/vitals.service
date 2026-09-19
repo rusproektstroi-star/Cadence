@@ -1,0 +1,11 @@
+[Unit]
+Description=vitals — пульс гостя раз в 5 с, ловит остановки виртуалки
+
+[Service]
+Type=simple
+ExecStart=%h/bin/vitals
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

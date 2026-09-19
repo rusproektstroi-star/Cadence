@@ -244,7 +244,7 @@ Installation bugs get fixed the day they're reported. The project has been insta
 | Hosts file changes silently ignored | Not running as administrator |
 | Two VMs fighting over an address | Clone identity not reset: same machine-id, same DHCP client id |
 | A `vmrun` command "succeeded" but nothing happened | `vmrun` can exit 0 on a failed operation — verify state, not exit codes |
-| VM shows as running, Tools alive, but answers neither SSH nor ping | If the VMs live on an external USB drive: Windows put the drive to sleep (disk idle timeout / USB selective suspend) and the guest stalls whole on the next disk access. The kernel log fills with `workqueue: ... hogged CPU` across unrelated queues — that is wall-clock waiting, not load. Check `sar -r`/`sar -S` first: if memory is fine and swap is zero, the cause is on the host. `docs/OPERATIONS.md` §7 |
+| VM shows as running, Tools alive, but answers neither SSH nor ping | **Open issue — cause not yet established.** Ruled out so far: background apt, guest memory (18% used, zero swap, no OOM in any boot), VMware ballooning, the dev-server watchdog, host sleep. The kernel log fills with `workqueue: ... hogged CPU` across unrelated queues — that is wall-clock waiting, so the whole guest was stalled. The repo ships three probes to catch it: `golden-image/bin/vitals` (5-second heartbeat with drift), `golden-image/bin/freeze-report` (post-mortem of the previous boot) and `scripts/watch-fleet.ps1` (host-side watcher). `docs/OPERATIONS.md` §7 |
 | An agent reports "sudo needs a password" and stops | It tested `sudo -n true`. Only specific commands are passwordless — `true` isn't one. Check with `sudo -n -l`; `docs/OPERATIONS.md` §0 |
 
 ---
@@ -279,7 +279,16 @@ config the orchestrator writes. **Fix — once, on the golden image, not per clo
 sudo mv /etc/netplan/00-installer-config.yaml /etc/netplan/00-installer-config.yaml.disabled
 ```
 
-**The guest freezes solid after an hour or two, and adding RAM doesn't help** — fixed 2026-09-19.
+**The guest freezes solid after an hour or two — still open.** Four explanations were proposed and
+all four were falsified: background apt, guest memory, VMware ballooning, and host sleep. What is
+certain: memory is never the issue (18% used, zero swap, no OOM in any boot), and the whole guest
+stalls rather than any single process. The repo now ships three probes — a 5-second in-guest
+heartbeat that records drift, a per-boot post-mortem, and a host-side watcher that survives the
+freeze. `docs/OPERATIONS.md` §7 has the falsification table and how to read the three logs together.
+The `.vmx` settings below were part of one of the falsified attempts; they are harmless and left in
+place, but they are not the fix.
+
+**(part of a falsified attempt, kept as harmless)** — 2026-09-19.
 The hypervisor reclaims memory from a perfectly healthy guest: the guest's journal shows zero OOM
 records while `vmballoon_work` floods the kernel. Three lock-ups before it was pinned down, one of
 them after the memory had already been raised. **Fix:** in the `.vmx` of the image (clones inherit)

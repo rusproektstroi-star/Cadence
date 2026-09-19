@@ -1,0 +1,62 @@
+#!/bin/bash
+# freeze-report — при каждой загрузке разбирает ПРЕДЫДУЩУЮ и дописывает отчёт.
+# Смысл: когда гость "зависает", внутри него потом ничего не найти, если не собрать улики сразу.
+# Отвечает на три вопроса: оборвалась ли прошлая загрузка резко, была ли нехватка памяти,
+# и стоял ли гость целиком (разрыв времени в журнале = хост уснул или VM была приостановлена).
+set -u
+LOG="$HOME/freeze-report.log"
+
+{
+  echo "==================================================================="
+  echo "Загрузка: $(date '+%Y-%m-%d %H:%M:%S %Z')   uptime: $(uptime -p)"
+
+  if ! journalctl -b -1 -n 1 >/dev/null 2>&1; then
+    echo "  Предыдущей загрузки в журнале нет — первый старт или журнал очищен."
+    echo
+    exit 0
+  fi
+
+  # 1. Чем закончилась прошлая загрузка
+  LAST_LINE=$(journalctl -b -1 -n 1 --no-pager -o short-iso 2>/dev/null)
+  if journalctl -b -1 --no-pager 2>/dev/null | tail -30 | grep -qiE 'Reached target.*(Shutdown|Power-Off|Reboot)|Shutting down'; then
+    END="штатное выключение"
+  else
+    END="ОБРЫВ — штатного выключения в журнале нет (hard stop, паника или зависание)"
+  fi
+  echo "  Как закончилась прошлая загрузка: $END"
+  echo "  Последняя запись: $LAST_LINE"
+
+  # 2. Нехватка памяти — была или нет
+  OOM=$(journalctl -b -1 --no-pager 2>/dev/null | grep -ciE 'out of memory|oom-kill|Killed process' || true)
+  echo "  Записей об OOM/нехватке памяти: $OOM $( [ "$OOM" = "0" ] && echo '(память ни при чём)' )"
+
+  # 3. Разрывы времени — гость стоял целиком (хост уснул / VM приостановлена)
+  echo "  Разрывы в журнале дольше 120 с (гость стоял):"
+  journalctl -b -1 --no-pager -o short-unix 2>/dev/null | awk '
+    { t = $1 + 0 }
+    NR > 1 && t - prev > 120 {
+      printf "    %s  ->  %s   пауза %d мин\n",
+        strftime("%Y-%m-%d %H:%M:%S", prev), strftime("%Y-%m-%d %H:%M:%S", t), (t - prev) / 60
+      found = 1
+    }
+    { prev = t }
+    END { if (!found) print "    нет — гость шёл непрерывно" }
+  '
+
+  # 4. Память по факту, а не по ощущению
+  SA="/var/log/sysstat/sa$(date -d yesterday +%d)"
+  [ -f "$SA" ] || SA="/var/log/sysstat/sa$(date +%d)"
+  if [ -f "$SA" ]; then
+    echo "  Память перед остановкой (sar, последний замер):"
+    LC_ALL=C sar -r -f "$SA" 2>/dev/null | tail -2 | head -1 | awk '{printf "    использовано %s%%, доступно %s КБ\n", $5, $3}'
+    LC_ALL=C sar -S -f "$SA" 2>/dev/null | tail -2 | head -1 | awk '{printf "    swap занят %s%%\n", $3}'
+  fi
+
+  # 5. Последние строки — для глаз
+  echo "  Последние 8 записей прошлой загрузки:"
+  journalctl -b -1 -n 8 --no-pager -o short-iso 2>/dev/null | sed 's/^/    /'
+  echo
+} >> "$LOG" 2>&1
+
+# Держим лог компактным — последние 500 строк
+tail -n 500 "$LOG" > "$LOG.tmp" 2>/dev/null && mv "$LOG.tmp" "$LOG"
