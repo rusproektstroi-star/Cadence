@@ -93,10 +93,14 @@ task — the agent clones the image, configures the network, sets up the roles, 
 result. The docs/roadmap in this repository are what the agent works from, not a checklist for a
 human.
 
-The only steps the agent genuinely cannot do itself are the ones that require a secret that
-belongs to you personally (a sudo password typed into a real terminal, adding a deploy key in a
-GitHub repository's settings, clicking through a UAC dialog) — such moments are explicitly marked
-in the docs as "needs a real human," with no attempt to work around them.
+The only steps the agent doesn't do itself: adding a deploy key in the GitHub repository's
+settings, the interactive `claude` login in the panes, and editing the system `hosts` file (UAC).
+These are marked in the docs as "needs a real human," with no attempt to work around them.
+
+Ordinary work on the guests needs **no password**: the image grants a narrow passwordless list
+(`netplan apply` and the `/etc/netplan/*` paths, `systemctl`, `apt-get`/`apt`). Check it with
+`ssh <id> "sudo -n -l"` — not with `sudo -n true`, which isn't on the list and therefore always
+fails, producing a false "a password is needed" conclusion.
 
 ## About the IP addresses in the documentation
 
@@ -181,6 +185,7 @@ canon/project-screenshots-block.md — block for a project's CLAUDE.md: the oper
 golden-image/            — files to build the image (devctl/devpanel/start-agents.sh/systemd/...)
 docs/GOLDEN_IMAGE.md     — step-by-step image build recipe
 docs/OPERATIONS.md       — operations runbook (day-to-day commands)
+docs/NEW_MACHINE_CHECKLIST.md — per-machine deployment checklist, walk it end to end
 docs/ACCEPTANCE.md       — system verification log
 docs/decisions/          — write-ups of findings ("what broke and why"), not just a code comment
 docs/images/             — demo screenshots

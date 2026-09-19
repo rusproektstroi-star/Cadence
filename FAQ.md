@@ -279,6 +279,24 @@ config the orchestrator writes. **Fix — once, on the golden image, not per clo
 sudo mv /etc/netplan/00-installer-config.yaml /etc/netplan/00-installer-config.yaml.disabled
 ```
 
+**The guest freezes solid after an hour or two, and adding RAM doesn't help** — fixed 2026-09-19.
+The hypervisor reclaims memory from a perfectly healthy guest: the guest's journal shows zero OOM
+records while `vmballoon_work` floods the kernel. Three lock-ups before it was pinned down, one of
+them after the memory had already been raised. **Fix:** in the `.vmx` of the image (clones inherit)
+and of any existing machine — `sched.mem.maxmemctl = "0"`, `MemTrimRate = "0"`,
+`sched.mem.pin = "TRUE"`; apply with the VM powered off. Verify with `lsmod | grep balloon` — the
+module loads, its use count stays `0`. The profile's baseline memory also moved to 3072.
+
+**Background jobs disabled on the image** — 2026-09-19. `apt-daily`, `apt-daily-upgrade`,
+`unattended-upgrades`, `fwupd-refresh`, `motd-news`. Note the timers alone are not enough:
+`unattended-upgrades` schedules itself and survived for 50 minutes after its timers were switched
+off.
+
+**A deployment checklist now ships with the repo** — 2026-09-19, `docs/NEW_MACHINE_CHECKLIST.md`.
+It existed privately from the start and simply wasn't published; every line in it is there because
+it was once skipped. It also settles the question that costs the most time per machine — which
+steps genuinely need a human and which only look like they do.
+
 **The license files were renamed** — 2026-09-15. `LICENSE.html` became `SESL-CERTIFICATE.html` (plus
 a rendered `.pdf`), and a plain-text `LICENSE` was added: GitHub treats every root file starting with
 `LICENSE` as its own license tab, and was rendering raw HTML source as the license text. Only matters
