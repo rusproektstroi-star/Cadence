@@ -26,7 +26,11 @@ ssh <id> "sudo -n -l"
 ## Сразу при клонировании
 
 - [ ] Deploy-ключ создан **с правом записи сразу** (`read_only=false`): read-only ключ выглядит
-      рабочим до первой попытки `git push`, и тогда переоформлять приходится всё заново
+      рабочим до первой попытки `git push`, и тогда переоформлять приходится всё заново.
+      Этот шаг делает человек — давать ему **готовую ссылку и готовый текст ключа**, а не только
+      команду: `https://github.com/<owner>/<repo>/settings/keys` → Add deploy key → обязательно
+      галка **Allow write access**. Команда `gh api repos/<owner>/<repo>/keys -X POST -f
+      title=... -f key=... -F read_only=false` — альтернатива для тех, кому так удобнее
 - [ ] `vmfleet clone <id> -Repo git@github.com:... -DeployKey <путь>` — **SSH-форма URL**. С
       `https://` клонирование падает на «could not read Username»: deploy-ключ настраивает только SSH
 - [ ] `git log -1` на госте совпадает с последним коммитом в репозитории

@@ -244,7 +244,7 @@ Installation bugs get fixed the day they're reported. The project has been insta
 | Hosts file changes silently ignored | Not running as administrator |
 | Two VMs fighting over an address | Clone identity not reset: same machine-id, same DHCP client id |
 | A `vmrun` command "succeeded" but nothing happened | `vmrun` can exit 0 on a failed operation — verify state, not exit codes |
-| VM shows as running, Tools alive, but answers neither SSH nor ping | The hypervisor is taking memory back from a live guest: `vmballoon_work` floods the kernel while the guest's journal shows no OOM at all. Disable ballooning in the `.vmx` (`sched.mem.maxmemctl = "0"`, `MemTrimRate = "0"`, `sched.mem.pin = "TRUE"`); adding RAM does not fix it. `docs/OPERATIONS.md` §7 |
+| VM shows as running, Tools alive, but answers neither SSH nor ping | If the VMs live on an external USB drive: Windows put the drive to sleep (disk idle timeout / USB selective suspend) and the guest stalls whole on the next disk access. The kernel log fills with `workqueue: ... hogged CPU` across unrelated queues — that is wall-clock waiting, not load. Check `sar -r`/`sar -S` first: if memory is fine and swap is zero, the cause is on the host. `docs/OPERATIONS.md` §7 |
 | An agent reports "sudo needs a password" and stops | It tested `sudo -n true`. Only specific commands are passwordless — `true` isn't one. Check with `sudo -n -l`; `docs/OPERATIONS.md` §0 |
 
 ---
