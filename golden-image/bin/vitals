@@ -8,6 +8,15 @@
 #
 # Почему не `ps %cpu`: она считает среднее за всю жизнь процесса, поэтому только что запущенный
 # `ps` показывает 1600%. Реальную загрузку за интервал даёт pidstat (пакет sysstat).
+#
+# 2026-09-20. Разбор отказа 19 сентября показал предел прежней версии: она честно записала, что
+# все четыре vCPU прижаты, а системное время у всех процессов вчетверо выше пользовательского, —
+# но не могла ответить, ГДЕ теряется время. Добавлены два показателя, оба без прав root:
+#   steal — сколько процессора гость просил у гипервизора и не получил. Отвечает на вопрос
+#           «хост не отдаёт» против «гость сам себя загнал»;
+#   PSI   — встроенные в ядро счётчики давления (/proc/pressure). Говорят, на чём именно стоят
+#           задачи: cpu — очередь к процессору, mem — возврат памяти и уплотнение, io — диск.
+# Вместе они разводят три версии, которые мы до сих пор различали только косвенно.
 set -u
 
 STATE_DIR="$HOME/.local/state/vitals"; mkdir -p "$STATE_DIR"
@@ -18,12 +27,71 @@ RING_SIZE=40                           # ~2 минуты истории
 LOAD_WARN=2.0
 LOAD_CRIT=3.0
 DRIFT_CRIT=5                           # секунд отставания собственного таймера
+STEAL_CRIT=10                          # процентов украденного времени — уже аномалия
 DUMP_COOLDOWN=300                      # не чаще раза в 5 минут
 
 prev=$(date +%s)
 prev_load=0
 state=OK
 last_dump=0
+prev_steal=0
+prev_total=0
+prev_compact=0
+prev_loc=0
+
+# доля времени, украденного гипервизором, за интервал между замерами
+read_steal() {
+  awk '/^cpu /{ st=$9; tot=0; for(i=2;i<=NF;i++) tot+=$i; print st, tot }' /proc/stat
+}
+
+# Фрагментация памяти: сколько осталось свободных блоков высоких порядков (>=5, то есть от
+# 128 КБ подряд), и сколько раз ядро останавливало выделение ради уплотнения.
+#
+# Версия 9, после разбора 19 сентября: три загрузки подряд умерли, прожив под нагрузкой около
+# часа каждая, тогда как в простое та же машина прожила пятнадцать часов. Похоже не на
+# расписание (ежечасных задач в гостях нет), а на накопление. Фрагментация — главный кандидат:
+# крупные блоки кончаются, ядро уходит в уплотнение, и это выглядит ровно так, как мы видели —
+# системное время задрано у всех процессов сразу, ввод-вывод и ошибки страниц нулевые, диск
+# не при делах. Оба счётчика должны расти ЗАРАНЕЕ, за минуты до отказа; в этом их смысл.
+read_highorder() {
+  awk '/^Node/{ for (i = 9; i <= NF; i++) s += $i } END { print s+0 }' /proc/buddyinfo 2>/dev/null
+}
+
+read_compact() {
+  awk '/^compact_stall/{ print $2 }' /proc/vmstat 2>/dev/null
+}
+
+# Локальный таймер процессора (строка LOC в /proc/interrupts), суммарно по всем ядрам.
+#
+# Главный счётчик после разбора 20 сентября. При CONFIG_HZ=1000 и бестиковом режиме планировщик
+# физически не может дать больше тысячи прерываний на ядро, а на простаивающем — обязан давать
+# сильно меньше. В момент разгона перед отказом намерено 32738 в секунду на четыре ядра, то есть
+# восемь тысяч на каждое: таймер срабатывает в разы чаще, чем ядру нужно. Это единственное
+# измерение, которое объясняет все остальные разом — мягкие прерывания едят больше, чем система и
+# пользователь вместе, поштучный учёт процессов пуст (время прерываний процессам не приписывается),
+# steal ноль (время гостю дают, он тратит его сам), часы отстают, все vCPU в полке.
+#
+# Что смотреть: растёт ли loc плавно в течение часа или вспыхивает за минуты до отказа. От этого
+# зависит, лечится ли это настройкой часов или ловится только предупреждением.
+# Внимание к якорю: строка в /proc/interrupts начинается с пробелов (" LOC:  31556 ..."), поэтому
+# шаблон /^LOC/ не совпадает НИКОГДА и молча возвращает пустоту, а та при вычитании превращается в
+# ноль. Ловушка настоящая: напарник на ней уже обжёгся и чуть не отправил ноль как базовую линию.
+# Сравниваем первое поле целиком — awk сам отбрасывает ведущие пробелы при разбиении на поля.
+read_loc() {
+  awk '$1 == "LOC:" { s = 0; for (i = 2; i <= NF; i++) if ($i ~ /^[0-9]+$/) s += $i; print s; exit }' \
+      /proc/interrupts 2>/dev/null
+}
+
+# давление по подсистемам: avg10 строки some. Пустая строка, если ядро без PSI.
+read_psi() {
+  local f v out=""
+  for f in cpu memory io; do
+    v=$(awk '/^some/{for(i=1;i<=NF;i++) if($i ~ /^avg10=/){sub("avg10=","",$i); print $i; exit}}' \
+        "/proc/pressure/$f" 2>/dev/null)
+    out="$out${out:+ }${f:0:3}=${v:-?}"
+  done
+  echo "$out"
+}
 
 while true; do
   now=$(date +%s)
@@ -36,6 +104,22 @@ while true; do
   mem=$(free -m | awk '/^Mem:/ {printf "%d/%d", $3, $2}')
   swap=$(free -m | awk '/^Swap:/ {print $3}')
   dstate=$(ps -eo state= | grep -c '^D' || true)
+
+  read -r cur_steal cur_total <<<"$(read_steal)"
+  steal=$(awk -v s="$cur_steal" -v ps="$prev_steal" -v t="$cur_total" -v pt="$prev_total" \
+    'BEGIN{d=t-pt; if(d>0 && pt>0) printf "%.1f", (s-ps)*100/d; else printf "0.0"}')
+  prev_steal=$cur_steal; prev_total=$cur_total
+  psi=$(read_psi)
+
+  cur_compact=$(read_compact); cur_compact=${cur_compact:-0}
+  dcompact=$(( cur_compact - prev_compact )); [ "$dcompact" -lt 0 ] && dcompact=0
+  prev_compact=$cur_compact
+  hiorder=$(read_highorder)
+
+  cur_loc=$(read_loc); cur_loc=${cur_loc:-0}
+  if [ "$prev_loc" -gt 0 ]; then loc=$(( (cur_loc - prev_loc) / INTERVAL )); else loc=0; fi
+  [ "$loc" -lt 0 ] && loc=0
+  prev_loc=$cur_loc
 
   # Скорость роста нагрузки — первый признак, который был виден в прошлый раз задолго до смерти
   dload=$(awk -v a="$load1" -v b="$prev_load" -v t="$INTERVAL" 'BEGIN{printf "%.2f", (a-b)/t}')
@@ -50,8 +134,9 @@ while true; do
       }' | head -c 200)
   [ -z "$top3" ] && top3="—"
 
-  line=$(printf '%s drift=%+ds load=%s dload=%s run=%s blk=%s mem=%sMB swap=%sMB D=%s | %s' \
-    "$(date -Iseconds)" "$drift" "$load1" "$dload" "$runnable" "$blocked" "$mem" "$swap" "$dstate" "$top3")
+  line=$(printf '%s drift=%+ds load=%s dload=%s run=%s blk=%s mem=%sMB swap=%sMB D=%s steal=%s%% psi[%s] cmp=%s hi=%s loc=%s/с | %s' \
+    "$(date -Iseconds)" "$drift" "$load1" "$dload" "$runnable" "$blocked" "$mem" "$swap" "$dstate" \
+    "$steal" "$psi" "$dcompact" "$hiorder" "$loc" "$top3")
 
   echo "$line" >> "$LOG"
   echo "$line" >> "$RING"
@@ -62,9 +147,10 @@ while true; do
   awk -v l="$load1" -v w="$LOAD_WARN" 'BEGIN{exit !(l+0 >= w)}' && new_state=WARNING
   awk -v l="$load1" -v c="$LOAD_CRIT" 'BEGIN{exit !(l+0 >= c)}' && new_state=CRITICAL
   [ "$drift" -ge "$DRIFT_CRIT" ] && new_state=CRITICAL
+  awk -v s="$steal" -v c="$STEAL_CRIT" 'BEGIN{exit !(s+0 >= c)}' && new_state=CRITICAL
 
   if [ "$new_state" != "$state" ]; then
-    echo "$(date -Iseconds) СОСТОЯНИЕ: $state -> $new_state (load=$load1 drift=${drift}s)" >> "$LOG"
+    echo "$(date -Iseconds) СОСТОЯНИЕ: $state -> $new_state (load=$load1 drift=${drift}s steal=${steal}%)" >> "$LOG"
     state=$new_state
   fi
 
@@ -75,6 +161,11 @@ while true; do
     {
       echo "=== КРИТИЧЕСКОЕ СОСТОЯНИЕ $(date -Iseconds) ==="
       echo "load=$load1 dload=$dload drift=${drift}s runnable=$runnable blocked=$blocked D=$dstate"
+      echo "steal=${steal}%  psi(avg10): $psi"
+      echo "uptime: $(uptime -p 2>/dev/null)"
+      echo
+      echo "--- давление по подсистемам целиком (some = хоть кто-то стоит, full = стоят все) ---"
+      for f in cpu memory io; do echo "[$f]"; cat "/proc/pressure/$f" 2>/dev/null | sed 's/^/  /'; done
       echo
       echo "--- процессы по процессору (замер за 1 с) ---"
       pidstat -u 1 1 2>/dev/null | tail -n +4
@@ -82,10 +173,27 @@ while true; do
       echo "--- процессы по памяти и времени жизни ---"
       ps -eo pid,ppid,stat,pcpu,pmem,rss,etimes,args --sort=-pcpu 2>/dev/null | head -20
       echo
-      echo "--- потоки процессов-лидеров ---"
-      for p in $(ps -eo pid --sort=-pcpu --no-headers | head -3); do
-        echo "PID $p: threads=$(ls /proc/$p/task 2>/dev/null | wc -l) cmd=$(tr '\0' ' ' < /proc/$p/cmdline 2>/dev/null | head -c 120)"
+      echo "--- где именно застряли лидеры (wchan = функция ядра, в которой стоит процесс) ---"
+      for p in $(ps -eo pid --sort=-pcpu --no-headers | head -6); do
+        printf 'PID %s  wchan=%s  threads=%s  cmd=%s\n' \
+          "$p" \
+          "$(cat /proc/$p/wchan 2>/dev/null || echo '?')" \
+          "$(ls /proc/$p/task 2>/dev/null | wc -l)" \
+          "$(tr '\0' ' ' < /proc/$p/cmdline 2>/dev/null | head -c 100)"
       done
+      echo
+      echo "--- прерывания локального таймера по ядрам (норма при HZ=1000 — не выше 1000 на ядро) ---"
+      grep "LOC:" /proc/interrupts | sed "s/^/  /"
+      echo
+      echo "--- свободные блоки по порядкам: слева одиночные страницы, справа самые крупные ---"
+      cat /proc/buddyinfo 2>/dev/null | sed 's/^/  /'
+      echo
+      echo "--- возврат и уплотнение памяти (ненулевой рост compact_stall = ядро уплотняет память) ---"
+      grep -E '^(compact_stall|compact_fail|pgscan_direct|pgsteal_direct|thp_split|nr_free_pages|pswpin|pswpout)' \
+        /proc/vmstat 2>/dev/null | sed 's/^/  /'
+      echo
+      echo "--- прерывания (всплеск одной строки = шторм устройства) ---"
+      awk 'NR==1 || /LOC:|RES:|TLB:|CAL:|eth0|ens|PIW/' /proc/interrupts 2>/dev/null | head -12 | cut -c1-110
       echo
       echo "--- сеть и панели ---"
       ss -s 2>/dev/null | head -4

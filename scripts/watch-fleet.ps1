@@ -9,7 +9,7 @@
 
   Запуск (в отдельном окне или свёрнутым):
       pwsh -NoProfile -File <репозиторий>\scripts\watch-fleet.ps1
-  Остановка — Ctrl+C или закрыть окно. Лог: C:\vmfleet\logs\watch-<дата>.log
+  Остановка — Ctrl+C или закрыть окно. Лог: <репозиторий>\logs\watch-<дата>.log
 #>
 
 param(
@@ -36,17 +36,26 @@ function Get-VmxPid {
     # lock-файла <uuid>.vmem.lck\*.lck рядом с .vmx, тот же приём, что в vmfleet.ps1.
     param([string]$VmxPath)
     $dir = Split-Path $VmxPath -Parent
-    $lckDir = Get-ChildItem -Path $dir -Filter "*.vmem.lck" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
-    if (-not $lckDir) { return $null }
-    $lckFile = Get-ChildItem -Path $lckDir.FullName -Filter "*.lck" -File -ErrorAction SilentlyContinue | Select-Object -First 1
-    if (-not $lckFile) { return $null }
-    $m = [regex]::Match((Get-Content $lckFile.FullName -Raw -ErrorAction SilentlyContinue), '(\d+)-\d+\(vmware-vmx\.exe\)')
-    if ($m.Success) { return [int]$m.Groups[1].Value }
+    # Каталог .vmem.lck существует только пока у машины есть файл памяти. С
+    # mainMem.useNamedFile = "FALSE" его нет вовсе, и прибор слепнет (нашли 2026-09-20: в логе
+    # пошли сплошные "cpu=?"). Тот же PID в том же формате лежит в блокировке диска, поэтому
+    # перебираем все каталоги *.lck, начиная с памяти.
+    $lckDirs = @(Get-ChildItem -Path $dir -Filter "*.lck" -Directory -ErrorAction SilentlyContinue |
+                 Sort-Object { if ($_.Name -like "*.vmem.lck") { 0 } else { 1 } })
+    foreach ($lckDir in $lckDirs) {
+        foreach ($lckFile in @(Get-ChildItem -Path $lckDir.FullName -Filter "*.lck" -File -ErrorAction SilentlyContinue)) {
+            $m = [regex]::Match((Get-Content $lckFile.FullName -Raw -ErrorAction SilentlyContinue), '(\d+)-\d+\(vmware-vmx\.exe\)')
+            if ($m.Success) { return [int]$m.Groups[1].Value }
+        }
+    }
     return $null
 }
 
 $prev = @{}
 $script:prevCpu = @{}
+$script:prevIo = @{}
+$script:prevPf = @{}
+$script:prevStamp = $null
 while ($true) {
     $now = Get-Date
     $log = Join-Path $LogDir "watch-$($now.ToString('yyyy-MM-dd')).log"
@@ -67,14 +76,37 @@ while ($true) {
 
     # Процесс самой виртуалки: крутит ли он процессор в момент обрыва. Если vmware-vmx ест CPU —
     # гость сам себя загоняет; если простаивает — он чего-то ждёт снаружи. Это разные диагнозы.
+    # Помимо процессора снимаем ввод-вывод и ошибки страниц: если ОЗУ гостя подпёрта файлом .vmem
+    # на медленном диске, остановка происходит в слое памяти гипервизора и внутри гостя невидима
+    # (wa=0, D=0). Всплеск ошибок страниц у процесса виртуалки — единственный внешний след такого.
+    # Делим прирост процессорного времени на ФАКТИЧЕСКИЙ интервал, а не на плановый: когда гость не
+    # отвечает, проверка порта 22 висит на таймауте и виток растягивается до 20-25 с. Деление на
+    # номинальные 15 с завышало проценты в полтора раза — на этих цифрах мы уже делали выводы.
+    $sampleAt = Get-Date
+    $elapsed = if ($script:prevStamp) { ($sampleAt - $script:prevStamp).TotalSeconds } else { $IntervalSec }
+    if ($elapsed -le 0) { $elapsed = $IntervalSec }
+
     $vmxProcs = @{}
+    $cim = @(Get-CimInstance Win32_Process -Filter "Name='vmware-vmx.exe'" -ErrorAction SilentlyContinue)
     foreach ($p in Get-Process vmware-vmx -ErrorAction SilentlyContinue) {
-        $cpuNow = $p.TotalProcessorTime.TotalSeconds
         $key = $p.Id
-        $delta = if ($script:prevCpu.ContainsKey($key)) { [math]::Round(($cpuNow - $script:prevCpu[$key]) / $IntervalSec * 100, 1) } else { $null }
+        $cpuNow = $p.TotalProcessorTime.TotalSeconds
+        $c = $cim | Where-Object ProcessId -eq $key | Select-Object -First 1
+        $ioNow = if ($c) { [int64]$c.ReadTransferCount + [int64]$c.WriteTransferCount } else { 0 }
+        $pfNow = if ($c) { [int64]$c.PageFaults } else { 0 }
+
+        $cpuD = $null; $ioD = $null; $pfD = $null
+        if ($script:prevCpu.ContainsKey($key)) {
+            $cpuD = [math]::Round(($cpuNow - $script:prevCpu[$key]) / $elapsed * 100, 1)
+            $ioD  = [math]::Round((($ioNow - $script:prevIo[$key]) / $elapsed) / 1MB, 2)
+            $pfD  = [math]::Round(($pfNow - $script:prevPf[$key]) / $elapsed)
+        }
         $script:prevCpu[$key] = $cpuNow
-        $vmxProcs[$key] = @{ Cpu = $delta; Mem = [math]::Round($p.WorkingSet64 / 1MB) }
+        $script:prevIo[$key]  = $ioNow
+        $script:prevPf[$key]  = $pfNow
+        $vmxProcs[$key] = @{ Cpu = $cpuD; Mem = [math]::Round($p.WorkingSet64 / 1MB); Io = $ioD; Pf = $pfD }
     }
+    $script:prevStamp = $sampleAt
 
     $states = foreach ($vmx in $running) {
         $id = [System.IO.Path]::GetFileNameWithoutExtension($vmx)
@@ -88,7 +120,8 @@ while ($true) {
         $vmxPid = Get-VmxPid -VmxPath $vmx
         $cpuTxt = "cpu=?"
         if ($vmxPid -and $vmxProcs.ContainsKey([int]$vmxPid) -and $null -ne $vmxProcs[[int]$vmxPid].Cpu) {
-            $cpuTxt = "cpu={0}% ram={1}MB" -f $vmxProcs[[int]$vmxPid].Cpu, $vmxProcs[[int]$vmxPid].Mem
+            $v = $vmxProcs[[int]$vmxPid]
+            $cpuTxt = "cpu={0}% ram={1}MB io={2}МБ/с pf={3}/с" -f $v.Cpu, $v.Mem, $v.Io, $v.Pf
         }
 
         $mark = ''
