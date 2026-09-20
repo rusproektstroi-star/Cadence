@@ -211,14 +211,24 @@ function Get-VmHostMemoryUsageMB {
     # (vmware-vmx.exe) ..."), это доступно без elevation.
     param([string]$VmxPath)
     $dir = Split-Path $VmxPath -Parent
-    $lckDir = Get-ChildItem -Path $dir -Filter "*.vmem.lck" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
-    if (-not $lckDir) { return $null }
-    $lckFile = Get-ChildItem -Path $lckDir.FullName -Filter "*.lck" -File -ErrorAction SilentlyContinue | Select-Object -First 1
-    if (-not $lckFile) { return $null }
-    $content = Get-Content $lckFile.FullName -Raw -ErrorAction SilentlyContinue
-    $m = [regex]::Match($content, '(\d+)-\d+\(vmware-vmx\.exe\)')
-    if (-not $m.Success) { return $null }
-    $vmxPid = [int]$m.Groups[1].Value
+    #
+    # 2026-09-20: каталог .vmem.lck существует только пока у машины есть файл памяти. После
+    # mainMem.useNamedFile = "FALSE" его нет вовсе, и статус показывал ОЗУ как "-" у ВСЕХ машин
+    # парка, а цифру давала одна машина вне инвентаря — единственная, у кого файл памяти остался.
+    # Тот же PID в том же формате лежит в блокировке диска, поэтому перебираем все каталоги *.lck,
+    # начиная с памяти и далее по дискам.
+    $vmxPid = $null
+    $lckDirs = @(Get-ChildItem -Path $dir -Filter "*.lck" -Directory -ErrorAction SilentlyContinue |
+                 Sort-Object { if ($_.Name -like "*.vmem.lck") { 0 } else { 1 } })
+    foreach ($lckDir in $lckDirs) {
+        foreach ($lckFile in @(Get-ChildItem -Path $lckDir.FullName -Filter "*.lck" -File -ErrorAction SilentlyContinue)) {
+            $content = Get-Content $lckFile.FullName -Raw -ErrorAction SilentlyContinue
+            $m = [regex]::Match($content, '(\d+)-\d+\(vmware-vmx\.exe\)')
+            if ($m.Success) { $vmxPid = [int]$m.Groups[1].Value; break }
+        }
+        if ($vmxPid) { break }
+    }
+    if (-not $vmxPid) { return $null }
     try {
         $ws = (Get-Process -Id $vmxPid -ErrorAction Stop).WorkingSet64
         return [int][math]::Round($ws / 1MB)
