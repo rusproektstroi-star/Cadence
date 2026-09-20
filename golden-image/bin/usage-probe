@@ -6,25 +6,40 @@
 # подъёма после лимита — в момент, когда окно лимита достигает своего resets_at.
 #
 # Скрипт делает две вещи и обе дёшево:
-#   1. печатает человеку полосу расхода (то, ради чего строка состояния и существует);
+#   1. печатает человеку две строки: расход лимитов и «кто я» — роль, учётная запись, репозиторий;
 #   2. кладёт числа в файл состояния, откуда их читает usage-guard — хук, который говорит агенту,
 #      когда пора садиться.
 #
 # Почему так дёшево. Claude Code вызывает этот скрипт часто, гасит частые вызовы окном в 300 мс и
 # ОТМЕНЯЕТ незавершённый запуск при следующем событии. Поэтому здесь нет ни сети, ни git, ни
-# чего-либо, что может задуматься: один разбор JSON и одна запись.
+# чего-либо, что может задуматься: один разбор JSON, одна запись и кеш для учётной записи.
 #
-# Чего тут может не быть, и это нормально:
+# Чего во входном JSON может не быть, и это нормально:
 #   rate_limits    — только у подписчиков claude.ai Pro и Max, и только после первого ответа модели.
 #                    На машине с оплатой по API-ключу этих полей нет вовсе.
 #   context_window — null в начале сессии и сразу после /compact.
+#   workspace.repo — если у каталога нет remote origin.
 # Отсутствующее поле остаётся пустым, а не превращается в ноль: ноль означал бы «расход нулевой»,
 # то есть прямо противоположное незнанию.
 set -u
 
 STATE_DIR="$HOME/.local/state/cadence"
-STATE="$STATE_DIR/usage.json"
 mkdir -p "$STATE_DIR"
+
+# Роль панели — из CLAUDE_CONFIG_DIR, который Claude Code задаёт процессу панели, а этот скрипт
+# наследует как его потомок. Проверено на живой машине: у панелей стоит
+# CLAUDE_CONFIG_DIR=~/.config/claude-<машина>-bureau и ...-engineer.
+CFG="${CLAUDE_CONFIG_DIR:-}"
+case "$(basename "${CFG:-none}")" in
+    *-bureau)   role="бюро"    ;;
+    *-engineer) role="инженер" ;;
+    *)          role=""        ;;
+esac
+
+# У каждой панели СВОЙ файл состояния. Раньше файл был один на машину, и две панели затирали друг
+# друга: расход лимитов у них общий (одна учётная запись), а заполнение контекста — своё, и страж
+# читал чужие числа. Имя по роли, а не по session_id: ролей ровно две, файлы не плодятся.
+STATE="$STATE_DIR/usage${role:+-$(basename "$CFG")}.json"
 
 input=$(cat)
 
@@ -32,10 +47,9 @@ input=$(cat)
 #
 # Разделитель — 0x1f (разделитель единиц), а НЕ табуляция. Табуляция относится к пробельным
 # символам, и read схлопывает подряд идущие пробельные разделители в один: при отсутствующем поле
-# все последующие значения съезжают влево. Ловилось живьём на машине с оплатой по API-ключу, где
-# rate_limits нет вовсе: название модели приезжало на место числа. Непробельный разделитель
-# сохраняет пустые поля пустыми.
-IFS=$'\x1f' read -r h5_pct h5_reset d7_pct d7_reset ctx_pct model sid cost <<EOF
+# все последующие значения съезжают влево. Ловилось живьём на машине без rate_limits: название
+# модели приезжало на место числа. Непробельный разделитель сохраняет пустые поля пустыми.
+IFS=$'\x1f' read -r h5_pct h5_reset d7_pct d7_reset ctx_pct model sid cost repo_owner repo_name cwd <<EOF
 $(printf '%s' "$input" | jq -j '[
     (.rate_limits.five_hour.used_percentage  // ""),
     (.rate_limits.five_hour.resets_at        // ""),
@@ -44,7 +58,10 @@ $(printf '%s' "$input" | jq -j '[
     (.context_window.used_percentage         // ""),
     (.model.display_name                     // "?"),
     (.session_id                             // ""),
-    (.cost.total_cost_usd                    // 0)
+    (.cost.total_cost_usd                    // 0),
+    (.workspace.repo.owner                   // ""),
+    (.workspace.repo.name                    // ""),
+    (.workspace.current_dir                  // "")
   ] | join("\u001f")' 2>/dev/null)
 EOF
 
@@ -63,16 +80,45 @@ done
 # Запись атомарная: usage-guard читает этот файл в произвольный момент и не должен поймать
 # половину записи.
 tmp="$STATE.tmp.$$"
-printf '{"ts":%s,"worst":%s,"worst_of":"%s","five_hour":%s,"five_hour_resets_at":%s,"seven_day":%s,"seven_day_resets_at":%s,"context":%s,"model":"%s","session_id":"%s","cost_usd":%s}\n' \
-    "$(date +%s)" \
+printf '{"ts":%s,"role":"%s","worst":%s,"worst_of":"%s","five_hour":%s,"five_hour_resets_at":%s,"seven_day":%s,"seven_day_resets_at":%s,"context":%s,"model":"%s","session_id":"%s","cost_usd":%s,"repo":"%s"}\n' \
+    "$(date +%s)" "$role" \
     "${worst:-null}" "$worst_of" \
     "${h5_pct:-null}" "${h5_reset:-null}" \
     "${d7_pct:-null}" "${d7_reset:-null}" \
     "${ctx_pct:-null}" \
     "$model" "$sid" "${cost:-0}" \
+    "${repo_owner:+$repo_owner/}$repo_name" \
     > "$tmp" 2>/dev/null && mv -f "$tmp" "$STATE" 2>/dev/null
 
-# --- то, что видит человек ---
+# --- вторая строка: кто я ---
+#
+# Панели всех машин выглядят одинаково, и перепутать их легко — особенно когда их шесть штук в
+# разных окнах. Поэтому вторая строка отвечает на три вопроса: какая роль, под какой учётной
+# записью и в каком репозитории.
+
+# Учётная запись лежит в .claude.json конфиг-каталога агента, а файл этот большой (десятки
+# килобайт) — разбирать его на каждом запуске расточительно. Кешируем и перечитываем, только если
+# исходный файл стал новее кеша, то есть после повторного входа.
+account=""
+if [ -n "$CFG" ] && [ -r "$CFG/.claude.json" ]; then
+    cache="$STATE_DIR/account-$(basename "$CFG")"
+    if [ -r "$cache" ] && [ "$cache" -nt "$CFG/.claude.json" ]; then
+        account=$(cat "$cache" 2>/dev/null)
+    else
+        account=$(jq -r '.oauthAccount.emailAddress // empty' "$CFG/.claude.json" 2>/dev/null)
+        [ -n "$account" ] && printf '%s' "$account" > "$cache" 2>/dev/null
+    fi
+fi
+
+# Репозиторий Claude Code разбирает из remote origin сам — дёргать git не нужно. Если origin нет,
+# показываем имя каталога: лучше, чем пустота.
+if [ -n "$repo_name" ]; then
+    project="${repo_owner:+$repo_owner/}$repo_name"
+else
+    project="${cwd##*/}"
+fi
+
+# --- первая строка: расход ---
 
 bar() {
     # десять делений; пустое значение рисуется прочерками, а не нулём
@@ -99,9 +145,19 @@ until_reset() {
     printf ' сброс через %dч%02dм' $(( left / 3600 )) $(( (left % 3600) / 60 ))
 }
 
-printf '%s │ 5ч %s %s%% │ 7д %s%% │ контекст %s%%%s' \
+printf '%s │ 5ч %s %s%% │ 7д %s%% │ контекст %s%%%s\n' \
     "$model" \
     "$(bar "$h5_pct")" "$(fmt "$h5_pct")" \
     "$(fmt "$d7_pct")" \
     "$(fmt "$ctx_pct")" \
     "$(until_reset "$h5_reset")"
+
+# Вторая строка приглушена, чтобы не спорить с первой: расход важнее, опознание нужно лишь изредка.
+# Собирается только из непустого — на голом эталоне без репозитория и без входа строка не должна
+# превращаться в частокол разделителей.
+second=""
+for part in "$role" "$account" "$project"; do
+    [ -z "$part" ] && continue
+    second="${second:+$second · }$part"
+done
+[ -n "$second" ] && printf '\033[2m%s\033[0m\n' "$second"

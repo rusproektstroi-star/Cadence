@@ -16,8 +16,18 @@
 # действительными: сессия могла простоять, лимит мог сброситься. Молчим, а не пугаем устаревшим.
 set -u
 
-STATE="$HOME/.local/state/cadence/usage.json"
-BAND_FILE="$HOME/.local/state/cadence/usage-band"
+# Файл состояния — СВОЙ у каждой панели. Раньше он был один на машину, и две панели затирали друг
+# друга: расход лимитов у них общий (одна учётная запись), а заполнение контекста своё, и страж
+# читал чужие числа. Имя выводится из CLAUDE_CONFIG_DIR ровно так же, как это делает usage-probe:
+# переменную задаёт Claude Code процессу панели, а хук наследует её как его потомок.
+STATE_DIR="$HOME/.local/state/cadence"
+CFG="${CLAUDE_CONFIG_DIR:-}"
+case "$(basename "${CFG:-none}")" in
+    *-bureau|*-engineer) suffix="-$(basename "$CFG")" ;;
+    *)                   suffix="" ;;
+esac
+STATE="$STATE_DIR/usage${suffix}.json"
+BAND_FILE="$STATE_DIR/usage-band${suffix}"
 STALE_SEC=600
 
 cat >/dev/null            # вход хука не нужен, но прочитать его надо
