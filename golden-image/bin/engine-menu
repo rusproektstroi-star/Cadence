@@ -24,6 +24,16 @@
 # показывает, есть ли нить, и предупреждает, если её нет.
 set -u
 
+# Движки парк ставит глобально через npm, а его префикс — ~/.npm-global. В PATH этот каталог
+# попадает только из ~/.bashrc, то есть в интерактивной сессии; всплывающее окно и вызовы по SSH
+# его не видят, и таблица показывала бы «не установлен» для стоящих движков. Добавляем явно.
+PATH="$HOME/.npm-global/bin:$HOME/bin:$PATH"
+
+# Ключи движков лежат в ~/.config/*.env. Наследовать их нельзя: всплывающее окно получает
+# окружение сервера tmux, а не панели, и таблица показывала бы «нет ключа» у настроенных
+# движков. Подхватываем сами. Проверено живьём 2026-09-23.
+for e in "$HOME"/.config/*.env; do [ -r "$e" ] && . "$e"; done
+
 CONF="${ENGINES_CONF:-$HOME/etc/engines.conf}"
 PANE="${1:-}"
 [ -z "$PANE" ] && { echo "нужен идентификатор панели (передаётся из привязки tmux)"; sleep 3; exit 1; }
@@ -40,6 +50,10 @@ for p in $pane_pid $(pgrep -P "${pane_pid:-0}" 2>/dev/null); do
     cfg=$( { tr '\0' '\n' < "/proc/$p/environ"; } 2>/dev/null | sed -n 's/^CLAUDE_CONFIG_DIR=//p' | head -1)
     [ -n "$cfg" ] && { role=$(basename "$cfg" | sed 's/^claude-//'); break; }
 done
+# Чем панель была ЗАПУЩЕНА, а не как называется процесс. Определять по имени процесса нельзя:
+# движки на Node показываются как "node", и таблица не узнавала бы работающий gemini. Проверено
+# живьём 2026-09-23: claude виден как "claude", а gemini — как "node".
+started=$(tmux display-message -p -t "$PANE" '#{pane_start_command}' 2>/dev/null)
 running=$(tmux display-message -p -t "$PANE" '#{pane_current_command}' 2>/dev/null)
 
 thread="$HOME/.agent-thread/${role:-unknown}.md"
@@ -51,7 +65,10 @@ echo "  ────────────────────────
 while IFS='|' read -r num name cmd bin keyvar canon; do
     case "$num" in ''|\#*) continue ;; esac
 
-    if [ "$bin" = "$running" ]; then
+    # Вхождением имени, а не точным совпадением: панель запускается через обёртку-оболочку, и имя
+    # движка стоит внутри её командной строки. Шаблоны с пробелами по краям не срабатывали —
+    # строка кончается кавычкой: exec gemini'
+    if [ "$bin" = "$running" ] || case "$started" in *"$bin"*) true ;; *) false ;; esac; then
         state="● работает здесь"
     elif ! command -v "$bin" >/dev/null 2>&1; then
         state="✗ не установлен"
@@ -92,7 +109,15 @@ EOF
             read -r yes
             case "$yes" in [Yy]*) ;; *) echo "  отменено"; sleep 1; exit 0 ;; esac
         fi
-        tmux respawn-pane -k -t "$PANE" "$cmd"
+        # Движок запускается не голой командой, а через оболочку, которая сперва встаёт в рабочий
+        # каталог проекта и подхватывает ключи. respawn-pane стартует программу напрямую, минуя
+        # ~/.bashrc, — без этой обёртки gemini поднимался в домашнем каталоге и спрашивал, доверять
+        # ли папке, то есть вставал и ждал человека. Проверено живьём 2026-09-23.
+        # Домашний каталог подставляется здесь, при сборке строки, а не уезжает как $HOME внутрь:
+        # tmux передаёт команду как есть, и переменная доходила до панели буквально, экранированной.
+        # Проверено живьём: панель стартовала в каталоге «/workspace/project», которого нет.
+        wrap="cd $HOME/workspace/project 2>/dev/null || cd $HOME; for e in $HOME/.config/*.env; do . \"\$e\" 2>/dev/null; done; exec $cmd"
+        tmux respawn-pane -k -t "$PANE" "bash -c '$wrap'"
         echo "  поставлен $name"
         sleep 1
         ;;
